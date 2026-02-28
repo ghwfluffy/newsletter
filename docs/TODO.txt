@@ -1,0 +1,5 @@
+[ ] Get zoho/wix login
+[ ] Setup wix redirect for unsubscribe and newsletter manage
+[ ] Production env test
+[ ] Update contacts with production list
+[ ] Update other digital ocean VMs while you're in there
