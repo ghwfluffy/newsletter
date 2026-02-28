@@ -1,0 +1,10 @@
+{
+  "bind": "0.0.0.0",
+  "port": 443,
+  "domain": "example.com",
+  "tls_cert": "${config}/tls/${domain}/fullchain.pem",
+  "tls_key": "${config}/tls/${domain}/privkey.pem",
+  "token_secret": "changeme",
+  "admin_user": "admin",
+  "admin_pass_bcrypt": "$2b$12$JHB/zhIU.GoZEf6RN6y72.eeekabVbb47fFOJkp40B23WsRTxcwOC"
+}

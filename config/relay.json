@@ -1,0 +1,5 @@
+{
+  "poll_seconds": 30,
+  "public_base_url": "https://mydomain.com",
+  "unsubscribe_path": "/unsub"
+}

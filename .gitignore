@@ -1,2 +1,5 @@
+*.swp
 venv
 outfile.tmp
+config/tls
+config/list.db
