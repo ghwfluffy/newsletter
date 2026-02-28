@@ -3,7 +3,7 @@
 ## Overview
 The system has two long-running components:
 
-- Relay daemon (`src/replay-daemon.py`): polls IMAP, filters messages, and relays them via SMTP to recipients in SQLite. It appends a unique unsubscribe link for each recipient, enforces per-message send delay, and respects rank-based priority.
+- Relay daemon (`src/replay-daemon.py`): polls IMAP, filters messages, and relays them via SMTP to recipients in SQLite. It appends a unique unsubscribe link for each recipient, enforces per-message send delay, respects rank-based priority, and resizes embedded/attached images to a fixed width.
 - Web app (`src/webserver.py`): HTTPS Flask server that receives unsubscribe requests and provides a basic admin UI for list management, protected by a static username/password.
 
 Both services read from the same SQLite database.
@@ -12,11 +12,12 @@ Both services read from the same SQLite database.
 1. IMAP poll: the relay daemon connects to IMAP and checks for new messages.
 2. Filter: if the message matches the configured sender or is a bounce, it is eligible for processing.
 3. Load recipients: the daemon reads active recipients from SQLite, ordered by `rank` (ascending).
-4. Send loop: the daemon sends messages via SMTP with per-recipient throttling.
+4. Send loop: the daemon sends messages via SMTP with per-recipient throttling. Inline and attached images are resized to a fixed width if larger, with EXIF orientation correction.
 5. Unsubscribe link: each message includes a signed token for the recipient (`e`, `t`, `s` query params) and a `List-Unsubscribe` header.
-6. Unsubscribe: the web app looks up the token, marks the recipient as unsubscribed, and records timestamp.
+6. Unsubscribe: the web app displays a confirmation page, then on confirm marks the recipient as unsubscribed and records timestamp.
 7. Admin UI (`/manage`): authenticated operators can bulk add/unsubscribe and edit existing rows in a table.
 8. Bounce handling: delivery status notifications are parsed and the bounced recipient is unsubscribed automatically.
+9. Test tag handling: if any recipient local part contains `+test`, the message is relayed only back to the sender with `[TEST]` in the subject.
 
 ## Database Schema
 The schema below is the recommended baseline. The code should align with this.
@@ -48,7 +49,7 @@ Optional table if you want visibility into deliveries.
 - `error` TEXT
 
 ## Config Files
-- `config/imap.json` for IMAP polling and filter sender (`filter_recipient`).
+- `config/imap.json` for IMAP polling and filter sender (`filter_recipient`, array).
 - `config/smtp.json` for SMTP relay settings (including `from`).
 - `config/relay.json` for poll interval, public base URL, and unsubscribe path.
 - `config/db.json` for the SQLite path (`${config}/list.db`).

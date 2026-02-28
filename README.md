@@ -12,10 +12,12 @@ This is designed to be self-hosted and easy to operate on a small server.
 - SMTP relay with per-recipient unsubscribe links.
 - Throttled delivery to avoid SMTP provider rate limits.
 - Recipient rank/priority ordering (send higher rank first).
-- Unsubscribe endpoint that marks recipients inactive.
+- Unsubscribe endpoint that requires a confirmation click before marking recipients inactive.
 - Admin UI (`/manage`) protected by a static username/password (bcrypt hash stored in config).
 - Self-contained TLS issuance/renewal via ACME (`acme.sh`).
 - Automatic bounce handling to unsubscribe undeliverable addresses.
+- Embedded/attached image resizing (fixed width with EXIF orientation correction).
+- `+test` recipient tag routes only back to the sender with a `[TEST]` subject prefix.
 
 ## How It Works (Short)
 1. The relay daemon polls IMAP for new messages.
@@ -24,6 +26,7 @@ This is designed to be self-hosted and easy to operate on a small server.
 4. For each recipient, a unique unsubscribe link is appended at the bottom of the email body.
 5. The Flask server receives unsubscribe requests and marks the recipient as unsubscribed.
 6. The admin UI lets an operator bulk add/unsubscribe and edit existing entries.
+7. If any recipient local part contains `+test`, the message is relayed only back to the sender with `[TEST]` in the subject.
 
 ## Requirements
 - Python 3.10+ recommended.
@@ -42,7 +45,7 @@ All config and secrets are JSON files. Example structure:
   "username": "newsletter@example.org",
   "password": "...",
   "mailbox": "INBOX",
-  "filter_recipient": "newsletter@example.org"
+  "filter_recipient": ["newsletter@example.org"]
 }
 ```
 
@@ -132,6 +135,7 @@ Or run both services with watchdogs:
 - SMTP throttling uses per-recipient sleeps in the relay daemon.
 - Ranking is a numeric field; lower numbers are sent first (see architecture doc).
 - Unsubscribe links are unique per recipient. Treat them as secrets.
+- Images larger than 600px wide are resized to 600px wide before sending. Smaller images are left as-is.
 - Consider running both services under systemd, with logs written to disk.
 
 ## Security Notes

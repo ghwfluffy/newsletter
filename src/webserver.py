@@ -131,9 +131,15 @@ def sign(email_addr: str, token: str) -> str:
 
 @app.get("/unsub")
 def unsub():
-    e = (request.args.get("e") or "").lower()
-    t = request.args.get("t") or ""
-    s = request.args.get("s") or ""
+    if request.method == "POST":
+        e = (request.form.get("e") or "").lower()
+        t = request.form.get("t") or ""
+        s = request.form.get("s") or ""
+    else:
+        e = (request.args.get("e") or "").lower()
+        t = request.args.get("t") or ""
+        s = request.args.get("s") or ""
+
     if not e or not t or not s:
         abort(400)
 
@@ -142,9 +148,29 @@ def unsub():
 
     con = _get_conn()
     cur = con.cursor()
-    row = cur.execute("SELECT token FROM recipients WHERE email=?", (e,)).fetchone()
+    row = cur.execute("SELECT token, unsubscribed FROM recipients WHERE email=?", (e,)).fetchone()
     if not row or row[0] != t:
         abort(403)
+
+    if request.method == "GET":
+        return f"""<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Confirm Unsubscribe</title></head>
+<body>
+  <h1>Confirm Unsubscribe</h1>
+  <p>Click confirm to stop receiving these emails.</p>
+  <form method="post" action="/spj/unsub">
+    <input type="hidden" name="e" value="{e}">
+    <input type="hidden" name="t" value="{t}">
+    <input type="hidden" name="s" value="{s}">
+    <button type="submit">Confirm Unsubscribe</button>
+  </form>
+</body>
+</html>
+"""
+
+    if row[1] == 1:
+        return "You are already unsubscribed.\n", 200
 
     now = _now_iso()
     cur.execute(
@@ -260,7 +286,7 @@ def manage():
 
     <div class="card section">
       <h3>Bulk Update</h3>
-      <p class="small">Paste CSV/newline/tab/colon/semicolon separated emails.</p>
+      <p class="small">Paste emails.</p>
       <form method="post">
         <textarea name="bulk_input"></textarea>
         <div class="actions">
