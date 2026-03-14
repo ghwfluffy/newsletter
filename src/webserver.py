@@ -7,6 +7,7 @@ import hashlib
 import base64
 import secrets
 import re
+import html
 from datetime import datetime, timezone
 import bcrypt
 from config import load_config
@@ -59,6 +60,18 @@ def _split_emails(blob: str) -> list[str]:
 
 def _get_conn():
     return sqlite3.connect(app_config.resolved_db_path)
+
+
+def _get_config_value(cur, key: str) -> str | None:
+    row = cur.execute("SELECT value FROM config WHERE key=?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def _render_timestamp_cell(value: str) -> str:
+    if value == "Never":
+        return "Never"
+    escaped = html.escape(value, quote=True)
+    return f'<span class="js-local-ts" data-iso="{escaped}">{escaped}</span>'
 
 
 def _upsert_recipient(cur, email: str, rank: int | None, subscribed: bool | None, name: str | None):
@@ -214,10 +227,20 @@ def manage():
 
     con = _get_conn()
     cur = con.cursor()
+    last_message_received_at = _get_config_value(cur, "last_message_received_at") or "Never"
+    last_handled_message_received_at = _get_config_value(cur, "last_handled_message_received_at") or "Never"
+    last_handled_message_type = _get_config_value(cur, "last_handled_message_type") or "Never"
+    last_delivery_sent_count = _get_config_value(cur, "last_delivery_sent_count") or "0"
+    last_delivery_total_count = _get_config_value(cur, "last_delivery_total_count") or "0"
     rows = cur.execute(
         "SELECT id, email, rank, unsubscribed, name FROM recipients ORDER BY email ASC"
     ).fetchall()
     con.close()
+
+    mode = "Debug" if app_config.test.enabled else "Production"
+    last_delivery_progress = f"{last_delivery_sent_count}/{last_delivery_total_count}"
+    last_message_received_html = _render_timestamp_cell(last_message_received_at)
+    last_handled_message_received_html = _render_timestamp_cell(last_handled_message_received_at)
 
     table_rows = []
     for rid, email, rank, unsub, name in rows:
@@ -267,6 +290,19 @@ def manage():
     <p class="small">{message}</p>
 
     <div class="card section">
+      <h3>Status</h3>
+      <table>
+        <tbody>
+          <tr><th>Mode</th><td>{mode}</td></tr>
+          <tr><th>Last Message Received</th><td>{last_message_received_html}</td></tr>
+          <tr><th>Last Handled Message</th><td>{last_handled_message_received_html}</td></tr>
+          <tr><th>Last Message Type</th><td>{last_handled_message_type}</td></tr>
+          <tr><th>Last Delivery Progress</th><td>{last_delivery_progress}</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card section">
       <h3>Bulk Update</h3>
       <p class="small">Paste emails.</p>
       <form method="post">
@@ -300,6 +336,49 @@ def manage():
         </table>
       </form>
     </div>
+    <script>
+      function ordinalDay(day) {{
+        const mod100 = day % 100;
+        if (mod100 >= 11 && mod100 <= 13) {{
+          return `${{day}}th`;
+        }}
+        const mod10 = day % 10;
+        if (mod10 === 1) {{
+          return `${{day}}st`;
+        }}
+        if (mod10 === 2) {{
+          return `${{day}}nd`;
+        }}
+        if (mod10 === 3) {{
+          return `${{day}}rd`;
+        }}
+        return `${{day}}th`;
+      }}
+
+      function formatLocalTimestamp(isoValue) {{
+        const date = new Date(isoValue);
+        if (Number.isNaN(date.getTime())) {{
+          return isoValue;
+        }}
+        const parts = new Intl.DateTimeFormat(undefined, {{
+          month: "long",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+          timeZoneName: "short",
+        }}).formatToParts(date);
+        const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+        return `${{values.month}} ${{ordinalDay(Number(values.day))}}, ${{values.hour}}:${{values.minute}} ${{values.dayPeriod}} ${{values.timeZoneName}}`;
+      }}
+
+      for (const element of document.querySelectorAll(".js-local-ts")) {{
+        const isoValue = element.dataset.iso;
+        if (isoValue) {{
+          element.textContent = formatLocalTimestamp(isoValue);
+        }}
+      }}
+    </script>
   </body>
 </html>
 """

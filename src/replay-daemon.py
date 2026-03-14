@@ -53,6 +53,37 @@ def _set_config_value(cur, key: str, value: str) -> None:
     )
 
 
+def _set_config_if_newer(cur, key: str, value: str) -> None:
+    current = _get_config_value(cur, key)
+    if current:
+        try:
+            if datetime.fromisoformat(current) >= datetime.fromisoformat(value):
+                return
+        except ValueError:
+            pass
+    _set_config_value(cur, key, value)
+
+
+def _set_delivery_progress(sent_count: int, total_count: int) -> None:
+    con = sqlite3.connect(app_config.resolved_db_path)
+    cur = con.cursor()
+    _set_config_value(cur, "last_delivery_sent_count", str(sent_count))
+    _set_config_value(cur, "last_delivery_total_count", str(total_count))
+    con.commit()
+    con.close()
+
+
+def _start_delivery_status(message_received_at: str, message_type: str, total_count: int) -> None:
+    con = sqlite3.connect(app_config.resolved_db_path)
+    cur = con.cursor()
+    _set_config_if_newer(cur, "last_handled_message_received_at", message_received_at)
+    _set_config_value(cur, "last_handled_message_type", message_type)
+    _set_config_value(cur, "last_delivery_sent_count", "0")
+    _set_config_value(cur, "last_delivery_total_count", str(total_count))
+    con.commit()
+    con.close()
+
+
 def connect_imap():
     m = imaplib.IMAP4_SSL(app_config.imap.host, app_config.imap.port)
     m.login(app_config.imap.username, app_config.imap.password)
@@ -323,6 +354,7 @@ def main_loop():
             last_seen_raw = _get_config_value(cur, "last_processed_at")
             last_seen = datetime.fromisoformat(last_seen_raw) if last_seen_raw else None
             if last_seen and msg_dt <= last_seen:
+                _set_config_if_newer(cur, "last_message_received_at", msg_dt.isoformat())
                 _set_config_value(cur, "last_uid", uid_text)
                 con.commit()
                 con.close()
@@ -331,6 +363,7 @@ def main_loop():
 
             if is_stale:
                 print(f"Skipping stale message from {msg_dt.isoformat()}")
+                _set_config_if_newer(cur, "last_message_received_at", msg_dt.isoformat())
                 _set_config_value(cur, "last_processed_at", msg_dt.isoformat())
                 _set_config_value(cur, "last_uid", uid_text)
                 con.commit()
@@ -343,6 +376,7 @@ def main_loop():
                 continue
 
             print(f"Received message at {msg_dt.isoformat()}")
+            _set_config_if_newer(cur, "last_message_received_at", msg_dt.isoformat())
             _set_config_value(cur, "last_processed_at", msg_dt.isoformat())
             _set_config_value(cur, "last_uid", uid_text)
             con.commit()
@@ -369,12 +403,14 @@ def main_loop():
 
             if is_test:
                 sender = _extract_sender_email(msg)
+                _start_delivery_status(msg_dt.isoformat(), "Test", 1 if sender else 0)
                 if sender:
                     print(f"Test recipient detected; relaying only to sender {sender}")
                     mime_bytes = forward_test_message(raw, sender)
                     smtp = connect_smtp()
                     try:
                         smtp.sendmail(app_config.smtp.username, [sender], mime_bytes)
+                        _set_delivery_progress(1, 1)
                     except Exception as e:
                         print(f"Failed to send test mail: {str(e)}")
                     finally:
@@ -385,7 +421,9 @@ def main_loop():
                 continue
 
             # Send in priority order
-            sent = 0
+            completed = 0
+            attempts = 0
+            _start_delivery_status(msg_dt.isoformat(), "Newsletter", len(contacts))
             for _rank, rcpt, token in contacts:
                 print(f"Sending to {rcpt}")
 
@@ -404,8 +442,10 @@ def main_loop():
                     time.sleep(random.uniform(*app_config.relay.per_recipient_sleep_seconds))
                 except Exception as e:
                     print(f"Exception sending to {rcpt}: " + str(e))
-                sent += 1
-                if sent % app_config.relay.batch_size == 0:
+                completed += 1
+                _set_delivery_progress(completed, len(contacts))
+                attempts += 1
+                if attempts % app_config.relay.batch_size == 0:
                     time.sleep(random.uniform(*app_config.relay.between_batches_sleep_seconds))
 
             time.sleep(random.uniform(*app_config.relay.per_message_sleep_seconds))

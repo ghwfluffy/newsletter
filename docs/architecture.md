@@ -37,7 +37,7 @@ The schema below is the recommended baseline. The code should align with this.
 - `key` TEXT PRIMARY KEY
 - `value` TEXT NOT NULL
 
-The `config` table stores operational state like `last_processed_at` and `last_uid` to avoid reprocessing messages.
+The `config` table stores operational state like `last_processed_at`, `last_uid`, message status timestamps, message type, and delivery progress counters.
 
 ### `send_log`
 Optional table if you want visibility into deliveries.
