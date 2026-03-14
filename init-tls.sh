@@ -5,10 +5,8 @@ set -euo pipefail
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="${BASE_DIR}/config"
 ACME_HOME="${CONFIG_DIR}/acme"
-TLS_DIR=""
 ACME_SH="${ACME_HOME}/acme.sh"
-CONFIG_WEB="${CONFIG_DIR}/web.json"
-TLS_DIR="${CONFIG_DIR}/tls/${DOMAIN}"
+CONFIG_PATH="${CONFIG_DIR}/config.json"
 
 if ! command -v curl >/dev/null 2>&1; then
   echo "curl not found. Install curl and re-run." >&2
@@ -20,15 +18,16 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ ! -f "${CONFIG_WEB}" ]]; then
-  echo "Missing ${CONFIG_WEB}." >&2
+if [[ ! -f "${CONFIG_PATH}" ]]; then
+  echo "Missing ${CONFIG_PATH}." >&2
   exit 1
 fi
 
-DOMAIN="$(jq -r '.domain // empty' "${CONFIG_WEB}")"
+DOMAIN="$(jq -r '.web.domain // empty' "${CONFIG_PATH}")"
 if [[ -z "${DOMAIN}" || "${DOMAIN}" == "null" ]]; then
   DOMAIN="hostrelayvec.com"
 fi
+TLS_DIR="${CONFIG_DIR}/tls/${DOMAIN}"
 
 read -r -p "Contact email for Let's Encrypt (recommended): " ACME_EMAIL
 
@@ -62,10 +61,10 @@ jq \
   --arg domain "${DOMAIN}" \
   --arg cert '${config}/tls/${domain}/fullchain.pem' \
   --arg key '${config}/tls/${domain}/privkey.pem' \
-  '.domain=$domain | .tls_cert=$cert | .tls_key=$key' \
-  "${CONFIG_WEB}" > "${TMP_FILE}"
+  '.web.domain=$domain | .web.tls_cert=$cert | .web.tls_key=$key' \
+  "${CONFIG_PATH}" > "${TMP_FILE}"
 
-mv "${TMP_FILE}" "${CONFIG_WEB}"
+mv "${TMP_FILE}" "${CONFIG_PATH}"
 
 cat <<MSG
 TLS initialized.

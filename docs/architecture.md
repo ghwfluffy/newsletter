@@ -49,12 +49,14 @@ Optional table if you want visibility into deliveries.
 - `error` TEXT
 
 ## Config Files
-- `config/imap.json` for IMAP polling and filter sender (`filter_recipient`, array).
-- `config/smtp.json` for SMTP relay settings (including `from`).
-- `config/relay.json` for poll interval, public base URL, and unsubscribe path.
-- `config/db.json` for the SQLite path (`${config}/list.db`).
-- `config/web.json` for HTTPS bind, domain, admin credentials, and token secret.
-- `config/schema.sql` for initializing the database.
+- `config/config.json` is the single runtime config file.
+- The `imap` section stores IMAP polling settings and the sender filter (`filter_recipient`, array).
+- The `smtp` section stores SMTP relay settings, including `from`.
+- The `relay` section stores poll interval and relay throttling delays.
+- The `db` section stores the SQLite path (`${config}/list.db`).
+- The `web` section stores HTTPS bind, domain, public base URL, admin credentials, token secret, unsubscribe path, and manage path.
+- The `test` section stores an optional test-mode switch and override recipient list.
+- `config/schema.sql` initializes the database.
 
 ## Unsubscribe Token
 - One token per recipient stored in the database.
@@ -68,8 +70,12 @@ Optional table if you want visibility into deliveries.
 ## Rate Limiting
 - The relay daemon sleeps between recipients to avoid SMTP provider throttling.
 
+## Test Mode
+- If `test.enabled` is `true`, the relay sends only to the configured `test.contacts` list instead of loading active recipients from SQLite.
+- Test-mode contacts use the non-destructive `"Test"` unsubscribe token.
+
 ## Security
-- Admin UI uses bcrypt hash stored in `config/web.json`.
+- Admin UI uses bcrypt hash stored in `config/config.json` under `web.admin_pass_bcrypt`.
 - Web app must be served only over HTTPS.
 - Keep secrets out of version control.
 

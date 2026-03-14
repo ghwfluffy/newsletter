@@ -3,7 +3,7 @@ set -euo pipefail
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="${BASE_DIR}/config"
-CONFIG_WEB="${CONFIG_DIR}/web.json"
+CONFIG_PATH="${CONFIG_DIR}/config.json"
 
 if ! command -v openssl >/dev/null 2>&1; then
   echo "openssl not found. Install openssl and re-run." >&2
@@ -15,12 +15,12 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ ! -f "${CONFIG_WEB}" ]]; then
-  echo "Missing ${CONFIG_WEB}." >&2
+if [[ ! -f "${CONFIG_PATH}" ]]; then
+  echo "Missing ${CONFIG_PATH}." >&2
   exit 1
 fi
 
-DOMAIN="$(jq -r '.domain // empty' "${CONFIG_WEB}")"
+DOMAIN="$(jq -r '.web.domain // empty' "${CONFIG_PATH}")"
 if [[ -z "${DOMAIN}" || "${DOMAIN}" == "null" ]]; then
   DOMAIN="hostrelayvec.com"
 fi

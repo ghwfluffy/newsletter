@@ -4,50 +4,15 @@ from flask import Flask, request, abort
 import sqlite3
 import hmac
 import hashlib
-import json
 import base64
 import secrets
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 import bcrypt
+from config import load_config
 
 
-def _load_json_from_config(filename: str) -> dict:
-    base = Path(__file__).resolve().parent
-    candidates = [
-        base / ".." / "config" / filename,
-        base / "config" / filename,
-    ]
-    for path in candidates:
-        if path.exists():
-            with path.open("r", encoding="utf-8") as f:
-                return json.load(f)
-    searched = ", ".join(str(p) for p in candidates)
-    raise FileNotFoundError(f"Missing {filename}. Searched: {searched}")
-
-
-def _resolve_path(raw_path: str, domain: str | None = None) -> str:
-    base = Path(__file__).resolve().parent
-    config_dir = (base / ".." / "config").resolve()
-    resolved = raw_path.replace("${config}", str(config_dir))
-    if domain:
-        resolved = resolved.replace("${domain}", domain)
-    return resolved
-
-
-web_cfg = _load_json_from_config("web.json")
-db_cfg = _load_json_from_config("db.json")
-
-DOMAIN = web_cfg["domain"]
-DB_PATH = _resolve_path(db_cfg["db_path"], DOMAIN)
-TOKEN_SECRET = web_cfg["token_secret"].encode("utf-8")
-WEB_BIND = web_cfg["bind"]
-WEB_PORT = int(web_cfg["port"])
-TLS_CERT = _resolve_path(web_cfg["tls_cert"], DOMAIN)
-TLS_KEY = _resolve_path(web_cfg["tls_key"], DOMAIN)
-ADMIN_USER = web_cfg["admin_user"]
-ADMIN_PASS_BCRYPT = web_cfg["admin_pass_bcrypt"]
+app_config = load_config()
 
 app = Flask(__name__)
 
@@ -57,7 +22,7 @@ def _now_iso() -> str:
 
 
 def _require_auth() -> bool:
-    if not ADMIN_USER or not ADMIN_PASS_BCRYPT:
+    if not app_config.web.admin_user or not app_config.web.admin_pass_bcrypt:
         abort(500, description="Admin credentials not configured.")
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Basic "):
@@ -69,9 +34,11 @@ def _require_auth() -> bool:
     if ":" not in decoded:
         return False
     user, password = decoded.split(":", 1)
-    if user != ADMIN_USER:
+    if user != app_config.web.admin_user:
         return False
-    return bcrypt.checkpw(password.encode("utf-8"), ADMIN_PASS_BCRYPT.encode("utf-8"))
+    return bcrypt.checkpw(
+        password.encode("utf-8"), app_config.web.admin_pass_bcrypt.encode("utf-8")
+    )
 
 
 def _auth_challenge():
@@ -91,7 +58,7 @@ def _split_emails(blob: str) -> list[str]:
 
 
 def _get_conn():
-    return sqlite3.connect(DB_PATH)
+    return sqlite3.connect(app_config.db.resolved_path)
 
 
 def _upsert_recipient(cur, email: str, rank: int | None, subscribed: bool | None, name: str | None):
@@ -126,10 +93,9 @@ def _upsert_recipient(cur, email: str, rank: int | None, subscribed: bool | None
 
 def sign(email_addr: str, token: str) -> str:
     msg = f"{email_addr}\n{token}".encode("utf-8")
-    return hmac.new(TOKEN_SECRET, msg, hashlib.sha256).hexdigest()
+    return hmac.new(app_config.web.token_secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
 
 
-@app.route("/unsub", methods=["GET", "POST"])
 def unsub():
     if request.method == "POST":
         e = (request.form.get("e") or "").lower()
@@ -150,7 +116,7 @@ def unsub():
 <body>
   <h1>Test Unsubscribe</h1>
   <p>This is a test. The unsubscribe page looks like this though.</p>
-  <form method="post" action="/unsub">
+  <form method="post" action="{app_config.web.unsubscribe_path}">
     <input type="hidden" name="e" value="{e}">
     <input type="hidden" name="t" value="{t}">
     <input type="hidden" name="s" value="{s}">
@@ -176,7 +142,7 @@ def unsub():
 <body>
   <h1>Confirm Unsubscribe</h1>
   <p>Click confirm to stop receiving these emails.</p>
-  <form method="post" action="/unsub">
+  <form method="post" action="{app_config.web.unsubscribe_path}">
     <input type="hidden" name="e" value="{e}">
     <input type="hidden" name="t" value="{t}">
     <input type="hidden" name="s" value="{s}">
@@ -198,7 +164,6 @@ def unsub():
     return "Unsubscribed. You will no longer receive these emails.\n", 200
 
 
-@app.route("/manage", methods=["GET", "POST"])
 def manage():
     if not _require_auth():
         return _auth_challenge()
@@ -342,5 +307,13 @@ def manage():
     return html
 
 
+app.add_url_rule(app_config.web.unsubscribe_path, view_func=unsub, methods=["GET", "POST"])
+app.add_url_rule(app_config.web.manage_path, view_func=manage, methods=["GET", "POST"])
+
+
 if __name__ == "__main__":
-    app.run(host=WEB_BIND, port=WEB_PORT, ssl_context=(TLS_CERT, TLS_KEY))
+    app.run(
+        host=app_config.web.bind,
+        port=app_config.web.port,
+        ssl_context=(app_config.web.resolved_tls_cert, app_config.web.resolved_tls_key),
+    )

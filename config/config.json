@@ -1,0 +1,45 @@
+{
+  "imap": {
+    "host": "imap.mail.com",
+    "port": 993,
+    "username": "receiver@example.com",
+    "password": "password",
+    "filter_recipient": ["origin_sender@example.com"],
+    "_": ""
+  },
+  "smtp": {
+    "host": "smtp.mail.com",
+    "port": 587,
+    "username": "sender@example.com",
+    "password": "password",
+    "from": "Sender <sender@example.com>",
+    "_": ""
+  },
+  "db": {
+    "db_path": "${config}/list.db"
+  },
+  "web": {
+    "bind": "0.0.0.0",
+    "port": 443,
+    "domain": "example.com",
+    "tls_cert": "${config}/tls/${domain}/fullchain.pem",
+    "tls_key": "${config}/tls/${domain}/privkey.pem",
+    "public_base_url": "https://example.com",
+    "token_secret": "changeme",
+    "unsubscribe_path": "/unsub",
+    "manage_path": "/manage",
+    "admin_user": "admin",
+    "admin_pass_bcrypt": "$2b$12$JHB/zhIU.GoZEf6RN6y72.eeekabVbb47fFOJkp40B23WsRTxcwOC"
+  },
+  "relay": {
+    "poll_seconds": 30,
+    "batch_size": 50,
+    "per_recipient_sleep_seconds": [25, 40],
+    "per_message_sleep_seconds": [5, 12],
+    "between_batches_sleep_seconds": [300, 900]
+  },
+  "test": {
+    "enabled": true,
+    "contacts": ["testemail1@example.com"]
+  }
+}

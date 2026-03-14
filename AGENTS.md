@@ -13,11 +13,11 @@ This project provides a newsletter relay daemon and a Flask web app.
 - `src/replay-daemon.py` - IMAP polling and SMTP relay daemon.
 - `src/webserver.py` - Flask app (unsubscribe endpoint + list management UI).
 - `docs/architecture.md` - system architecture and data model.
-- `config/` - local config and secrets (not committed). Includes SMTP/IMAP JSON and admin password hash.
+- `config/` - local config and secrets (not committed). Includes `config/config.json`, TLS material, and schema.
 - `init-db.sh` - create the SQLite database from `config/schema.sql`.
 - `init-tls.sh` - issue/renew TLS via ACME (`acme.sh`).
 - `init-dev-tls.sh` - create a self-signed TLS cert for local testing.
-- `setpass.sh` - set admin password in `config/web.json`.
+- `setpass.sh` - set admin password in `config/config.json`.
 - `go.sh` - run relay, web, and TLS watchdogs.
 
 ## Conventions

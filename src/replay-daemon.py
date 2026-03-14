@@ -5,8 +5,6 @@ import ssl
 import smtplib
 import time
 import random
-import json
-from pathlib import Path
 from email import policy, encoders
 from email.parser import BytesParser
 from email.utils import getaddresses
@@ -17,71 +15,22 @@ import hashlib
 import re
 from urllib.parse import urlencode
 from datetime import datetime, timezone
+from config import load_config
 
 
-def _load_json_from_config(filename: str) -> dict:
-    base = Path(__file__).resolve().parent
-    candidates = [
-        base / ".." / "config" / filename,
-        base / "config" / filename,
-    ]
-    for path in candidates:
-        if path.exists():
-            with path.open("r", encoding="utf-8") as f:
-                return json.load(f)
-    searched = ", ".join(str(p) for p in candidates)
-    raise FileNotFoundError(f"Missing {filename}. Searched: {searched}")
+app_config = load_config()
 
-
-def _resolve_db_path(raw_path: str) -> str:
-    base = Path(__file__).resolve().parent
-    config_dir = (base / ".." / "config").resolve()
-    return raw_path.replace("${config}", str(config_dir))
-
-
-imap_cfg = _load_json_from_config("imap.json")
-smtp_cfg = _load_json_from_config("smtp.json")
-db_cfg = _load_json_from_config("db.json")
-relay_cfg = _load_json_from_config("relay.json")
-web_cfg = _load_json_from_config("web.json")
-
-IMAP_HOST = imap_cfg["host"]
-IMAP_PORT = int(imap_cfg["port"])
-IMAP_USER = imap_cfg["username"]
-IMAP_PASS = imap_cfg["password"]
-
-SMTP_HOST = smtp_cfg["host"]
-SMTP_PORT = int(smtp_cfg["port"])
-SMTP_USER = smtp_cfg["username"]
-SMTP_PASS = smtp_cfg.get("password")
-FROM_HEADER = smtp_cfg["from"]
-
-DB_PATH = _resolve_db_path(db_cfg["db_path"])
-POLL_SECONDS = int(relay_cfg["poll_seconds"])
-PUBLIC_BASE_URL = relay_cfg["public_base_url"]
-UNSUBSCRIBE_PATH = relay_cfg["unsubscribe_path"]
-TOKEN_SECRET = web_cfg["token_secret"].encode("utf-8")
-
-_filter_recipient = imap_cfg["filter_recipient"]
-if isinstance(_filter_recipient, str):
-    ALLOWED_FROMS = [_filter_recipient]
-else:
-    ALLOWED_FROMS = list(_filter_recipient)
-ALLOWED_FROMS = [v.lower() for v in ALLOWED_FROMS]
 TEST_TAG = "+test"
-
-# throttling
-BATCH_SIZE = 50
-PER_RCPT_SLEEP_RANGE = (25.0, 40.0)   # jitter between recipients
-PER_MESSAGE_SLEEP_RANGE = (5.0, 12.0)
-SLEEP_BETWEEN_BATCHES = (300, 900)
 
 REPLY_TO_MODE = "original"  # "original" or "list"
 INLINE_IMAGE_WIDTH = 600
 
 
 def load_contacts() -> list[tuple[int, str, str]]:
-    con = sqlite3.connect(DB_PATH)
+    if app_config.test.enabled:
+        return [(index, email, "Test") for index, email in enumerate(app_config.test.normalized_contacts, start=1)]
+
+    con = sqlite3.connect(app_config.db.resolved_path)
     cur = con.cursor()
     rows = cur.execute(
         "SELECT rank, email, token FROM recipients WHERE unsubscribed=0 ORDER BY rank ASC, id ASC"
@@ -104,21 +53,21 @@ def _set_config_value(cur, key: str, value: str) -> None:
 
 
 def connect_imap():
-    m = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
-    m.login(IMAP_USER, IMAP_PASS)
+    m = imaplib.IMAP4_SSL(app_config.imap.host, app_config.imap.port)
+    m.login(app_config.imap.username, app_config.imap.password)
     m.select("INBOX")
     return m
 
 
 def connect_smtp():
-    s = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
+    s = smtplib.SMTP(app_config.smtp.host, app_config.smtp.port, timeout=30)
     s.ehlo()
-    if SMTP_PORT != 25:
+    if app_config.smtp.port != 25:
         ctx = ssl.create_default_context()
         s.starttls(context=ctx)
         s.ehlo()
-    if SMTP_PASS:
-        s.login(SMTP_USER, SMTP_PASS)
+    if app_config.smtp.password:
+        s.login(app_config.smtp.username, app_config.smtp.password)
     return s
 
 
@@ -251,12 +200,12 @@ def _resize_inline_images(msg) -> None:
 
 def _sign_unsub(email_addr: str, token: str) -> str:
     msg = f"{email_addr}\n{token}".encode("utf-8")
-    return hmac.new(TOKEN_SECRET, msg, hashlib.sha256).hexdigest()
+    return hmac.new(app_config.web.token_secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
 
 
 def _build_unsub_link(email_addr: str, token: str) -> str:
     qs = urlencode({"e": email_addr, "t": token, "s": _sign_unsub(email_addr, token)})
-    return f"{PUBLIC_BASE_URL}{UNSUBSCRIBE_PATH}?{qs}"
+    return f"{app_config.web.public_base_url}{app_config.web.unsubscribe_path}?{qs}"
 
 
 def _insert_html_before_close(html: str, snippet: str) -> str:
@@ -333,7 +282,7 @@ def forward_full_fidelity(raw_bytes: bytes, rcpt: str, token: str):
     set_or_replace(msg, "To", rcpt)
 
     # 2) Your visible From (can also keep original if you prefer)
-    set_or_replace(msg, "From", FROM_HEADER)
+    set_or_replace(msg, "From", app_config.smtp.from_header)
 
     # 3) Reply-To behavior
     if REPLY_TO_MODE == "original":
@@ -341,7 +290,7 @@ def forward_full_fidelity(raw_bytes: bytes, rcpt: str, token: str):
         # if you'd rather force replies elsewhere, set REPLY_TO_MODE="list"
         pass
     else:
-        set_or_replace(msg, "Reply-To", FROM_HEADER)
+        set_or_replace(msg, "Reply-To", app_config.smtp.from_header)
 
     # Optional: List headers (helps legit mailing list semantics)
     # Note: you said you already append an unsubscribe link; keep your existing mechanism here.
@@ -391,7 +340,7 @@ def main_loop():
 
             print(f"check {msg_dt.isoformat()}")
 
-            con = sqlite3.connect(DB_PATH)
+            con = sqlite3.connect(app_config.db.resolved_path)
             cur = con.cursor()
             last_seen_raw = _get_config_value(cur, "last_processed_at")
             last_seen = datetime.fromisoformat(last_seen_raw) if last_seen_raw else None
@@ -415,7 +364,7 @@ def main_loop():
             from_hdr = (msg.get("From") or "").lower()
             is_test = _has_test_tag(_extract_header_recipients(msg))
             is_bounce = _is_bounce(msg)
-            if not any(v in from_hdr for v in ALLOWED_FROMS) and not is_bounce:
+            if not any(v in from_hdr for v in app_config.imap.allowed_froms) and not is_bounce:
                 continue
 
             print(f"Received message {msg_id.decode() if hasattr(msg_id, 'decode') else msg_id}: {msg.get('subject')}")
@@ -428,7 +377,7 @@ def main_loop():
                     mime_bytes = forward_test_message(raw, sender)
                     smtp = connect_smtp()
                     try:
-                        smtp.sendmail(SMTP_USER, [sender], mime_bytes)
+                        smtp.sendmail(app_config.smtp.username, [sender], mime_bytes)
                     except Exception as e:
                         print(f"Failed to send test mail: {str(e)}")
                     finally:
@@ -436,7 +385,7 @@ def main_loop():
                 else:
                     print("Test recipient detected but no sender address found; skipping")
                 imap.store(msg_id, "+FLAGS", "\\Seen")
-                time.sleep(random.uniform(*PER_MESSAGE_SLEEP_RANGE))
+                time.sleep(random.uniform(*app_config.relay.per_message_sleep_seconds))
                 continue
 
             # Send in priority order
@@ -450,20 +399,20 @@ def main_loop():
                     # Envelope sender can differ from header From:
                     smtp = connect_smtp()
                     try:
-                        smtp.sendmail(SMTP_USER, [rcpt], mime_bytes)
+                        smtp.sendmail(app_config.smtp.username, [rcpt], mime_bytes)
                     except Exception as e:
                         print(f"Failed to send mail: {str(e)}")
                     finally:
                         smtp.quit()
 
-                    time.sleep(random.uniform(*PER_RCPT_SLEEP_RANGE))
+                    time.sleep(random.uniform(*app_config.relay.per_recipient_sleep_seconds))
                 except Exception as e:
                     print(f"Exception sending to {rcpt}: " + str(e))
                 sent += 1
-                if sent % BATCH_SIZE == 0:
-                    time.sleep(random.uniform(*SLEEP_BETWEEN_BATCHES))
+                if sent % app_config.relay.batch_size == 0:
+                    time.sleep(random.uniform(*app_config.relay.between_batches_sleep_seconds))
 
-            time.sleep(random.uniform(*PER_MESSAGE_SLEEP_RANGE))
+            time.sleep(random.uniform(*app_config.relay.per_message_sleep_seconds))
     except Exception as e:
         print("Exception: " + str(e))
     finally:
@@ -483,4 +432,4 @@ if __name__ == "__main__":
             main_loop()
         except Exception:
             pass
-        time.sleep(POLL_SECONDS)
+        time.sleep(app_config.relay.poll_seconds)

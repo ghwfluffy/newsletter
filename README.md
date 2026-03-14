@@ -35,59 +35,52 @@ This is designed to be self-hosted and easy to operate on a small server.
 - A TLS certificate for HTTPS (port 443).
 
 ## Configuration
-All config and secrets are JSON files. Example structure:
+All config and secrets live in `config/config.json`, split into sections:
 
-### `config/imap.json`
+### `config/config.json`
 ```json
 {
-  "host": "imap.example.org",
-  "port": 993,
-  "username": "newsletter@example.org",
-  "password": "...",
-  "mailbox": "INBOX",
-  "filter_recipient": ["newsletter@example.org"]
-}
-```
-
-### `config/smtp.json`
-```json
-{
-  "host": "smtp.example.org",
-  "port": 587,
-  "username": "newsletter@example.org",
-  "password": "...",
-  "starttls": true,
-  "from": "Your List <list@example.org>"
-}
-```
-
-### `config/web.json`
-```json
-{
-  "bind": "0.0.0.0",
-  "port": 443,
-  "domain": "listenserver.com",
-  "tls_cert": "${config}/tls/${domain}/fullchain.pem",
-  "tls_key": "${config}/tls/${domain}/privkey.pem",
-  "token_secret": "CHANGE_ME_TO_RANDOM_32B+",
-  "admin_user": "admin",
-  "admin_pass_bcrypt": "$2b$12$..."
-}
-```
-
-### `config/db.json`
-```json
-{
-  "db_path": "${config}/list.db"
-}
-```
-
-### `config/relay.json`
-```json
-{
-  "poll_seconds": 30,
-  "public_base_url": "https://listenserver.com",
-  "unsubscribe_path": "/unsub"
+  "imap": {
+    "host": "imap.example.org",
+    "port": 993,
+    "username": "newsletter@example.org",
+    "password": "...",
+    "filter_recipient": ["newsletter@example.org"]
+  },
+  "smtp": {
+    "host": "smtp.example.org",
+    "port": 587,
+    "username": "newsletter@example.org",
+    "password": "...",
+    "from": "Your List <list@example.org>"
+  },
+  "db": {
+    "db_path": "${config}/list.db"
+  },
+  "web": {
+    "bind": "0.0.0.0",
+    "port": 443,
+    "domain": "listenserver.com",
+    "tls_cert": "${config}/tls/${domain}/fullchain.pem",
+    "tls_key": "${config}/tls/${domain}/privkey.pem",
+    "public_base_url": "https://listenserver.com",
+    "token_secret": "CHANGE_ME_TO_RANDOM_32B+",
+    "unsubscribe_path": "/unsub",
+    "manage_path": "/manage",
+    "admin_user": "admin",
+    "admin_pass_bcrypt": "$2b$12$..."
+  },
+  "relay": {
+    "poll_seconds": 30,
+    "batch_size": 50,
+    "per_recipient_sleep_seconds": [25, 40],
+    "per_message_sleep_seconds": [5, 12],
+    "between_batches_sleep_seconds": [300, 900]
+  },
+  "test": {
+    "enabled": true,
+    "contacts": ["testemail1@example.com"]
+  }
 }
 ```
 
@@ -133,6 +126,7 @@ Or run both services with watchdogs:
 
 ## Operational Notes
 - SMTP throttling uses per-recipient sleeps in the relay daemon.
+- If `test.enabled` is `true`, the relay sends only to `test.contacts` instead of the subscribed recipients in SQLite.
 - Ranking is a numeric field; lower numbers are sent first (see architecture doc).
 - Unsubscribe links are unique per recipient. Treat them as secrets.
 - Images larger than 600px wide are resized to 600px wide before sending. Smaller images are left as-is.
@@ -141,7 +135,7 @@ Or run both services with watchdogs:
 ## Security Notes
 - Store all secrets outside the repo.
 - Use HTTPS only for the web app.
-- Keep the admin password hash in `config/web.json` and rotate if needed.
+- Keep the admin password hash in `config/config.json` under `web.admin_pass_bcrypt` and rotate if needed.
 
 ## Documentation
 - `docs/architecture.md`
