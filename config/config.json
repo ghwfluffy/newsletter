@@ -12,8 +12,7 @@
     "port": 587,
     "username": "sender@example.com",
     "password": "password",
-    "from": "Sender <sender@example.com>",
-    "_": ""
+    "from": "Sender <sender@example.com>"
   },
   "db": {
     "db_path": "${config}/list.db"
@@ -40,6 +39,7 @@
   },
   "test": {
     "enabled": true,
-    "contacts": ["testemail1@example.com"]
+    "contacts": ["testemail1@example.com"],
+    "test_db": "${config}/test.db"
   }
 }

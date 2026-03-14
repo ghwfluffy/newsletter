@@ -33,5 +33,11 @@ fi
 DB_PATH="${DB_PATH//\$\{config\}/${CONFIG_DIR}}"
 
 sqlite3 "${DB_PATH}" < "${SCHEMA_PATH}"
-
 echo "Initialized DB at ${DB_PATH}"
+
+TESTDB_PATH="$(jq -r '.test.test_db // empty' "${CONFIG_PATH}")"
+if [[ ! -z "${TESTDB_PATH}" && "${TESTDB_PATH}" != "null" ]]; then
+    TESTDB_PATH="${TESTDB_PATH//\$\{config\}/${CONFIG_DIR}}"
+    sqlite3 "${TESTDB_PATH}" < "${SCHEMA_PATH}"
+    echo "Initialized DB at ${TESTDB_PATH}"
+fi

@@ -30,7 +30,7 @@ def load_contacts() -> list[tuple[int, str, str]]:
     if app_config.test.enabled:
         return [(index, email, "Test") for index, email in enumerate(app_config.test.normalized_contacts, start=1)]
 
-    con = sqlite3.connect(app_config.db.resolved_path)
+    con = sqlite3.connect(app_config.resolved_db_path)
     cur = con.cursor()
     rows = cur.execute(
         "SELECT rank, email, token FROM recipients WHERE unsubscribed=0 ORDER BY rank ASC, id ASC"
@@ -340,7 +340,7 @@ def main_loop():
 
             print(f"check {msg_dt.isoformat()}")
 
-            con = sqlite3.connect(app_config.db.resolved_path)
+            con = sqlite3.connect(app_config.resolved_db_path)
             cur = con.cursor()
             last_seen_raw = _get_config_value(cur, "last_processed_at")
             last_seen = datetime.fromisoformat(last_seen_raw) if last_seen_raw else None

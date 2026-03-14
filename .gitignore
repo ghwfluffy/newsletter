@@ -3,6 +3,7 @@ venv
 outfile.tmp
 config/tls
 config/list.db
+config/test.db
 config/prod.json
 __pycache__
 rsync.sh

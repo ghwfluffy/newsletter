@@ -79,7 +79,8 @@ All config and secrets live in `config/config.json`, split into sections:
   },
   "test": {
     "enabled": true,
-    "contacts": ["testemail1@example.com"]
+    "contacts": ["testemail1@example.com"],
+    "test_db": "${config}/test.db"
   }
 }
 ```
@@ -127,6 +128,7 @@ Or run both services with watchdogs:
 ## Operational Notes
 - SMTP throttling uses per-recipient sleeps in the relay daemon.
 - If `test.enabled` is `true`, the relay sends only to `test.contacts` instead of the subscribed recipients in SQLite.
+- If `test.test_db` is set, it overrides `db.db_path` while test mode is enabled.
 - Ranking is a numeric field; lower numbers are sent first (see architecture doc).
 - Unsubscribe links are unique per recipient. Treat them as secrets.
 - Images larger than 600px wide are resized to 600px wide before sending. Smaller images are left as-is.

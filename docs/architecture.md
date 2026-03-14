@@ -55,7 +55,7 @@ Optional table if you want visibility into deliveries.
 - The `relay` section stores poll interval and relay throttling delays.
 - The `db` section stores the SQLite path (`${config}/list.db`).
 - The `web` section stores HTTPS bind, domain, public base URL, admin credentials, token secret, unsubscribe path, and manage path.
-- The `test` section stores an optional test-mode switch and override recipient list.
+- The `test` section stores an optional test-mode switch, override recipient list, and test-only DB override.
 - `config/schema.sql` initializes the database.
 
 ## Unsubscribe Token
@@ -72,6 +72,7 @@ Optional table if you want visibility into deliveries.
 
 ## Test Mode
 - If `test.enabled` is `true`, the relay sends only to the configured `test.contacts` list instead of loading active recipients from SQLite.
+- If `test.test_db` is set, it overrides `db.db_path` while test mode is enabled.
 - Test-mode contacts use the non-destructive `"Test"` unsubscribe token.
 
 ## Security

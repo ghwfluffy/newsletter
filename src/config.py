@@ -118,10 +118,17 @@ class RelayConfig:
 class TestConfig:
     enabled: bool
     contacts: list[str]
+    test_db: str | None
 
     @property
     def normalized_contacts(self) -> list[str]:
         return _to_lower_string_list(self.contacts)
+
+    @property
+    def resolved_db_path(self) -> str | None:
+        if not self.test_db:
+            return None
+        return _resolve_path(self.test_db)
 
 
 @dataclass(frozen=True)
@@ -132,6 +139,12 @@ class AppConfig:
     web: WebConfig
     relay: RelayConfig
     test: TestConfig
+
+    @property
+    def resolved_db_path(self) -> str:
+        if self.test.enabled and self.test.resolved_db_path:
+            return self.test.resolved_db_path
+        return self.db.resolved_path
 
     @classmethod
     def load(cls) -> AppConfig:
@@ -187,6 +200,7 @@ class AppConfig:
             test=TestConfig(
                 enabled=bool(test_raw.get("enabled", False)),
                 contacts=_to_string_list(test_raw.get("contacts", [])),
+                test_db=test_raw.get("test_db"),
             ),
         )
 

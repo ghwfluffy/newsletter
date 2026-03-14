@@ -58,7 +58,7 @@ def _split_emails(blob: str) -> list[str]:
 
 
 def _get_conn():
-    return sqlite3.connect(app_config.db.resolved_path)
+    return sqlite3.connect(app_config.resolved_db_path)
 
 
 def _upsert_recipient(cur, email: str, rank: int | None, subscribed: bool | None, name: str | None):
