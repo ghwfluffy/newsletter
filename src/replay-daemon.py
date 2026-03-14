@@ -14,13 +14,14 @@ import hmac
 import hashlib
 import re
 from urllib.parse import urlencode
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from config import load_config
 
 
 app_config = load_config()
 
 TEST_TAG = "+test"
+MAX_MESSAGE_AGE = timedelta(minutes=15)
 
 REPLY_TO_MODE = "original"  # "original" or "list"
 INLINE_IMAGE_WIDTH = 600
@@ -76,37 +77,6 @@ def set_or_replace(hdrs, k, v):
         hdrs.replace_header(k, v)
     else:
         hdrs[k] = v
-
-
-def _is_bounce(msg) -> bool:
-    if msg.get_content_type() == "multipart/report":
-        report_type = msg.get_param("report-type") or ""
-        if report_type.lower() == "delivery-status":
-            return True
-    for part in msg.walk():
-        if part.get_content_type() == "message/delivery-status":
-            return True
-    subj = (msg.get("Subject") or "").lower()
-    return "undelivered" in subj or "delivery status notification" in subj
-
-
-def _extract_bounce_recipients(msg) -> set[str]:
-    recipients: set[str] = set()
-    for part in msg.walk():
-        if part.get_content_type() != "message/delivery-status":
-            continue
-        payload = part.get_payload()
-        if not isinstance(payload, list):
-            continue
-        for block in payload:
-            for key in ("Final-Recipient", "Original-Recipient"):
-                val = block.get(key)
-                if not val:
-                    continue
-                if ";" in val:
-                    val = val.split(";", 1)[1].strip()
-                recipients.add(val.lower())
-    return recipients
 
 
 def _extract_header_recipients(msg) -> set[str]:
@@ -322,14 +292,21 @@ def main_loop():
     imap = connect_imap()
     con = None
     try:
-        # Search all messages; filter in code for allowed sender or bounces
-        status, data = imap.search(None, "ALL")
+        con = sqlite3.connect(app_config.resolved_db_path)
+        cur = con.cursor()
+        last_uid_raw = _get_config_value(cur, "last_uid")
+        con.close()
+        con = None
+
+        last_uid = int(last_uid_raw) if last_uid_raw else 0
+        status, data = imap.uid("search", None, f"UID {last_uid + 1}:*")
         if status != "OK":
             return
 
-        ids = data[0].split() if data and data[0] else []
-        for msg_id in ids:
-            st, fetched = imap.fetch(msg_id, "(RFC822 INTERNALDATE)")
+        uids = data[0].split() if data and data[0] else []
+        for uid in uids:
+            uid_text = uid.decode() if hasattr(uid, "decode") else str(uid)
+            st, fetched = imap.uid("fetch", uid, "(RFC822 INTERNALDATE)")
             if st != "OK" or not fetched or not fetched[0]:
                 continue
             raw = fetched[0][1]
@@ -337,6 +314,7 @@ def main_loop():
             if internaldate is None:
                 continue
             msg_dt = datetime.fromtimestamp(time.mktime(internaldate), tz=timezone.utc)
+            is_stale = datetime.now(timezone.utc) - msg_dt > MAX_MESSAGE_AGE
 
             print(f"check {msg_dt.isoformat()}")
 
@@ -345,29 +323,48 @@ def main_loop():
             last_seen_raw = _get_config_value(cur, "last_processed_at")
             last_seen = datetime.fromisoformat(last_seen_raw) if last_seen_raw else None
             if last_seen and msg_dt <= last_seen:
+                _set_config_value(cur, "last_uid", uid_text)
+                con.commit()
                 con.close()
+                con = None
+                continue
+
+            if is_stale:
+                print(f"Skipping stale message from {msg_dt.isoformat()}")
+                _set_config_value(cur, "last_processed_at", msg_dt.isoformat())
+                _set_config_value(cur, "last_uid", uid_text)
+                con.commit()
+                con.close()
+                con = None
+                try:
+                    imap.uid("store", uid, "+FLAGS", "(\\Seen)")
+                except Exception as e:
+                    print("IMAGE mark as read exception: " + str(e))
                 continue
 
             print(f"Received message at {msg_dt.isoformat()}")
             _set_config_value(cur, "last_processed_at", msg_dt.isoformat())
+            _set_config_value(cur, "last_uid", uid_text)
             con.commit()
             con.close()
             con = None
 
             # Mark as seen (optional)
             try:
-                imap.store(msg_id, "+FLAGS", "\\Seen")
+                imap.uid("store", uid, "+FLAGS", "(\\Seen)")
             except Exception as e:
                 print("IMAGE mark as read exception: " + str(e))
 
             msg = BytesParser(policy=policy.SMTP).parsebytes(raw)
             from_hdr = (msg.get("From") or "").lower()
             is_test = _has_test_tag(_extract_header_recipients(msg))
-            is_bounce = _is_bounce(msg)
-            if not any(v in from_hdr for v in app_config.imap.allowed_froms) and not is_bounce:
+            filter_recipient = app_config.imap.normalized_filter_recipient
+            if app_config.test.enabled and app_config.test.normalized_filter_recipient:
+                filter_recipient = app_config.test.normalized_filter_recipient
+            if filter_recipient not in from_hdr:
                 continue
 
-            print(f"Received message {msg_id.decode() if hasattr(msg_id, 'decode') else msg_id}: {msg.get('subject')}")
+            print(f"Received message {uid_text}: {msg.get('subject')}")
             contacts = load_contacts()
 
             if is_test:
@@ -384,7 +381,6 @@ def main_loop():
                         smtp.quit()
                 else:
                     print("Test recipient detected but no sender address found; skipping")
-                imap.store(msg_id, "+FLAGS", "\\Seen")
                 time.sleep(random.uniform(*app_config.relay.per_message_sleep_seconds))
                 continue
 

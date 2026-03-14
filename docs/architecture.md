@@ -37,7 +37,7 @@ The schema below is the recommended baseline. The code should align with this.
 - `key` TEXT PRIMARY KEY
 - `value` TEXT NOT NULL
 
-The `config` table stores operational state like `last_processed_at` to avoid reprocessing messages.
+The `config` table stores operational state like `last_processed_at` and `last_uid` to avoid reprocessing messages.
 
 ### `send_log`
 Optional table if you want visibility into deliveries.
@@ -50,12 +50,12 @@ Optional table if you want visibility into deliveries.
 
 ## Config Files
 - `config/config.json` is the single runtime config file.
-- The `imap` section stores IMAP polling settings and the sender filter (`filter_recipient`, array).
+- The `imap` section stores IMAP polling settings and the sender filter (`filter_recipient`, string).
 - The `smtp` section stores SMTP relay settings, including `from`.
 - The `relay` section stores poll interval and relay throttling delays.
 - The `db` section stores the SQLite path (`${config}/list.db`).
 - The `web` section stores HTTPS bind, domain, public base URL, admin credentials, token secret, unsubscribe path, and manage path.
-- The `test` section stores an optional test-mode switch, override recipient list, and test-only DB override.
+- The `test` section stores an optional test-mode switch, override recipient list, test-only sender filter override, and test-only DB override.
 - `config/schema.sql` initializes the database.
 
 ## Unsubscribe Token
@@ -72,6 +72,7 @@ Optional table if you want visibility into deliveries.
 
 ## Test Mode
 - If `test.enabled` is `true`, the relay sends only to the configured `test.contacts` list instead of loading active recipients from SQLite.
+- If `test.filter_recipient` is set, it overrides `imap.filter_recipient` while test mode is enabled.
 - If `test.test_db` is set, it overrides `db.db_path` while test mode is enabled.
 - Test-mode contacts use the non-destructive `"Test"` unsubscribe token.
 

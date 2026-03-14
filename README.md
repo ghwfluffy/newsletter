@@ -45,7 +45,7 @@ All config and secrets live in `config/config.json`, split into sections:
     "port": 993,
     "username": "newsletter@example.org",
     "password": "...",
-    "filter_recipient": ["newsletter@example.org"]
+    "filter_recipient": "newsletter@example.org"
   },
   "smtp": {
     "host": "smtp.example.org",
@@ -80,7 +80,8 @@ All config and secrets live in `config/config.json`, split into sections:
   "test": {
     "enabled": true,
     "contacts": ["testemail1@example.com"],
-    "test_db": "${config}/test.db"
+    "test_db": "${config}/test.db",
+    "filter_recipient": "testsender@example.com"
   }
 }
 ```
@@ -128,6 +129,7 @@ Or run both services with watchdogs:
 ## Operational Notes
 - SMTP throttling uses per-recipient sleeps in the relay daemon.
 - If `test.enabled` is `true`, the relay sends only to `test.contacts` instead of the subscribed recipients in SQLite.
+- If `test.filter_recipient` is set, it overrides `imap.filter_recipient` while test mode is enabled.
 - If `test.test_db` is set, it overrides `db.db_path` while test mode is enabled.
 - Ranking is a numeric field; lower numbers are sent first (see architecture doc).
 - Unsubscribe links are unique per recipient. Treat them as secrets.

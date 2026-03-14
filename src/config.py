@@ -34,6 +34,12 @@ def _resolve_path(raw_path: str, domain: str | None = None) -> str:
     return resolved
 
 
+def _to_lower_string(value: str | None) -> str:
+    if value is None:
+        return ""
+    return value.strip().lower()
+
+
 def _to_string_list(value: str | list[str]) -> list[str]:
     if isinstance(value, str):
         return [value]
@@ -57,11 +63,11 @@ class ImapConfig:
     port: int
     username: str
     password: str
-    filter_recipient: list[str]
+    filter_recipient: str
 
     @property
-    def allowed_froms(self) -> list[str]:
-        return _to_lower_string_list(self.filter_recipient)
+    def normalized_filter_recipient(self) -> str:
+        return _to_lower_string(self.filter_recipient)
 
 
 @dataclass(frozen=True)
@@ -119,10 +125,15 @@ class TestConfig:
     enabled: bool
     contacts: list[str]
     test_db: str | None
+    filter_recipient: str
 
     @property
     def normalized_contacts(self) -> list[str]:
         return _to_lower_string_list(self.contacts)
+
+    @property
+    def normalized_filter_recipient(self) -> str:
+        return _to_lower_string(self.filter_recipient)
 
     @property
     def resolved_db_path(self) -> str | None:
@@ -161,7 +172,7 @@ class AppConfig:
                 port=int(imap_raw["port"]),
                 username=imap_raw["username"],
                 password=imap_raw["password"],
-                filter_recipient=_to_string_list(imap_raw["filter_recipient"]),
+                filter_recipient=str(imap_raw["filter_recipient"]),
             ),
             smtp=SmtpConfig(
                 host=smtp_raw["host"],
@@ -201,6 +212,7 @@ class AppConfig:
                 enabled=bool(test_raw.get("enabled", False)),
                 contacts=_to_string_list(test_raw.get("contacts", [])),
                 test_db=test_raw.get("test_db"),
+                filter_recipient=str(test_raw.get("filter_recipient", "")),
             ),
         )
 

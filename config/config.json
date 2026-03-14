@@ -4,8 +4,7 @@
     "port": 993,
     "username": "receiver@example.com",
     "password": "password",
-    "filter_recipient": ["origin_sender@example.com"],
-    "_": ""
+    "filter_recipient": "origin_sender@example.com"
   },
   "smtp": {
     "host": "smtp.mail.com",
@@ -40,6 +39,7 @@
   "test": {
     "enabled": true,
     "contacts": ["testemail1@example.com"],
-    "test_db": "${config}/test.db"
+    "test_db": "${config}/test.db",
+    "filter_recipient": "testsender@example.com"
   }
 }
