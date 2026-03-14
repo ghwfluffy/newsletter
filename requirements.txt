@@ -1,3 +1,6 @@
 Flask>=2.3
 bcrypt>=4.0
 Pillow>=10.0
+mypy
+flake8
+ruff

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 
-import imaplib, ssl, smtplib, time, random
+import imaplib
+import ssl
+import smtplib
+import time
+import random
 import json
 from pathlib import Path
 from email import policy, encoders
@@ -10,8 +14,10 @@ from io import BytesIO
 import sqlite3
 import hmac
 import hashlib
+import re
 from urllib.parse import urlencode
 from datetime import datetime, timezone
+
 
 def _load_json_from_config(filename: str) -> dict:
     base = Path(__file__).resolve().parent
@@ -47,7 +53,7 @@ IMAP_PASS = imap_cfg["password"]
 SMTP_HOST = smtp_cfg["host"]
 SMTP_PORT = int(smtp_cfg["port"])
 SMTP_USER = smtp_cfg["username"]
-SMTP_PASS = smtp_cfg["password"]
+SMTP_PASS = smtp_cfg.get("password")
 FROM_HEADER = smtp_cfg["from"]
 
 DB_PATH = _resolve_db_path(db_cfg["db_path"])
@@ -65,8 +71,10 @@ ALLOWED_FROMS = [v.lower() for v in ALLOWED_FROMS]
 TEST_TAG = "+test"
 
 # throttling
-PER_RCPT_SLEEP_RANGE = (1.0, 3.0)   # jitter between recipients
+BATCH_SIZE = 50
+PER_RCPT_SLEEP_RANGE = (25.0, 40.0)   # jitter between recipients
 PER_MESSAGE_SLEEP_RANGE = (5.0, 12.0)
+SLEEP_BETWEEN_BATCHES = (300, 900)
 
 REPLY_TO_MODE = "original"  # "original" or "list"
 INLINE_IMAGE_WIDTH = 600
@@ -103,12 +111,14 @@ def connect_imap():
 
 
 def connect_smtp():
-    ctx = ssl.create_default_context()
     s = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
     s.ehlo()
-    s.starttls(context=ctx)
-    s.ehlo()
-    s.login(SMTP_USER, SMTP_PASS)
+    if SMTP_PORT != 25:
+        ctx = ssl.create_default_context()
+        s.starttls(context=ctx)
+        s.ehlo()
+    if SMTP_PASS:
+        s.login(SMTP_USER, SMTP_PASS)
     return s
 
 
@@ -185,7 +195,7 @@ def _resize_inline_images(msg) -> None:
     try:
         from PIL import Image, ImageOps
     except Exception as e:
-        print("Pillow dependency not found")
+        print(f"Pillow dependency not found: {str(e)}")
         return
 
     for part in msg.walk():
@@ -197,8 +207,8 @@ def _resize_inline_images(msg) -> None:
             continue
 
         try:
-            with Image.open(BytesIO(payload)) as im:
-                im = ImageOps.exif_transpose(im)
+            with Image.open(BytesIO(payload)) as img:
+                im = ImageOps.exif_transpose(img)
                 original_width, original_height = im.size
                 if original_width == 0 or original_height == 0:
                     continue
@@ -217,7 +227,7 @@ def _resize_inline_images(msg) -> None:
                 elif im.mode == "L":
                     im = im.convert("RGB")
 
-                im = im.resize((new_width, new_height), Image.LANCZOS)
+                im = im.resize((new_width, new_height), Image.LANCZOS)  # type: ignore[attr-defined]
                 out = BytesIO()
                 im.save(out, format="JPEG", quality=100)
                 jpeg_bytes = out.getvalue()
@@ -249,6 +259,43 @@ def _build_unsub_link(email_addr: str, token: str) -> str:
     return f"{PUBLIC_BASE_URL}{UNSUBSCRIBE_PATH}?{qs}"
 
 
+def _insert_html_before_close(html: str, snippet: str) -> str:
+    for closing_tag in ("</body>", "</html>"):
+        match = re.search(closing_tag, html, flags=re.IGNORECASE)
+        if match:
+            return f"{html[:match.start()]}{snippet}{html[match.start():]}"
+    return f"{html}{snippet}"
+
+
+def _normalize_inline_content_ids(msg) -> None:
+    replacements: dict[str, str] = {}
+    for index, part in enumerate(msg.walk(), start=1):
+        if "Content-ID" not in part:
+            continue
+        raw_value = str(part["Content-ID"]).strip()
+        cid = raw_value[1:-1] if raw_value.startswith("<") and raw_value.endswith(">") else raw_value
+        digest = hashlib.sha1(cid.encode("utf-8")).hexdigest()[:16]
+        new_cid = f"relay-{index}-{digest}@inline"
+        replacements[cid] = new_cid
+        del part["Content-ID"]
+        part._headers.append(("Content-ID", f"<{new_cid}>"))
+
+    if not replacements:
+        return
+
+    for part in msg.walk():
+        if part.get_content_maintype() != "text":
+            continue
+        subtype = part.get_content_subtype()
+        text = part.get_content()
+        updated = text
+        for old_cid, new_cid in replacements.items():
+            updated = updated.replace(f"cid:{old_cid}", f"cid:{new_cid}")
+            updated = updated.replace(f"[cid:{old_cid}]", f"[cid:{new_cid}]")
+        if updated != text:
+            part.set_content(updated, subtype=subtype, charset=part.get_content_charset() or "utf-8")
+
+
 def _append_unsub(msg, link: str):
     if msg.is_multipart():
         for part in msg.walk():
@@ -257,7 +304,10 @@ def _append_unsub(msg, link: str):
             subtype = part.get_content_subtype()
             text = part.get_content()
             if subtype == "html":
-                text = f"{text}<br><br><p>Unsubscribe: <a href=\"{link}\">{link}</a></p>"
+                text = _insert_html_before_close(
+                    text,
+                    f"<br><br><p>Unsubscribe: <a href=\"{link}\">{link}</a></p>",
+                )
             else:
                 text = f"{text}\n\nUnsubscribe: {link}\n"
             part.set_content(text, subtype=subtype, charset=part.get_content_charset() or "utf-8")
@@ -265,7 +315,10 @@ def _append_unsub(msg, link: str):
         subtype = msg.get_content_subtype()
         text = msg.get_content()
         if subtype == "html":
-            text = f"{text}<br><br><p>Unsubscribe: <a href=\"{link}\">{link}</a></p>"
+            text = _insert_html_before_close(
+                text,
+                f"<br><br><p>Unsubscribe: <a href=\"{link}\">{link}</a></p>",
+            )
         else:
             text = f"{text}\n\nUnsubscribe: {link}\n"
         msg.set_content(text, subtype=subtype, charset=msg.get_content_charset() or "utf-8")
@@ -297,17 +350,14 @@ def forward_full_fidelity(raw_bytes: bytes, rcpt: str, token: str):
     unsub_link = _build_unsub_link(rcpt, token)
     set_or_replace(msg, "List-Unsubscribe", f"<{unsub_link}>")
     _append_unsub(msg, unsub_link)
+    _normalize_inline_content_ids(msg)
     data = msg.as_bytes(policy=policy.SMTP)
     return data
 
 
 def forward_test_message(raw_bytes: bytes, sender: str) -> bytes:
+    raw_bytes = forward_full_fidelity(raw_bytes, sender, "Test")
     msg = BytesParser(policy=policy.SMTP).parsebytes(raw_bytes)
-
-    _resize_inline_images(msg)
-
-    set_or_replace(msg, "To", sender)
-    set_or_replace(msg, "From", FROM_HEADER)
 
     subj = msg.get("Subject")
     if subj:
@@ -321,7 +371,7 @@ def forward_test_message(raw_bytes: bytes, sender: str) -> bytes:
 
 def main_loop():
     imap = connect_imap()
-    smtp = connect_smtp()
+    con = None
     try:
         # Search all messages; filter in code for allowed sender or bounces
         status, data = imap.search(None, "ALL")
@@ -339,6 +389,8 @@ def main_loop():
                 continue
             msg_dt = datetime.fromtimestamp(time.mktime(internaldate), tz=timezone.utc)
 
+            print(f"check {msg_dt.isoformat()}")
+
             con = sqlite3.connect(DB_PATH)
             cur = con.cursor()
             last_seen_raw = _get_config_value(cur, "last_processed_at")
@@ -347,70 +399,82 @@ def main_loop():
                 con.close()
                 continue
 
+            print(f"Received message at {msg_dt.isoformat()}")
+            _set_config_value(cur, "last_processed_at", msg_dt.isoformat())
+            con.commit()
+            con.close()
+            con = None
+
+            # Mark as seen (optional)
+            try:
+                imap.store(msg_id, "+FLAGS", "\\Seen")
+            except Exception as e:
+                print("IMAGE mark as read exception: " + str(e))
+
             msg = BytesParser(policy=policy.SMTP).parsebytes(raw)
             from_hdr = (msg.get("From") or "").lower()
             is_test = _has_test_tag(_extract_header_recipients(msg))
             is_bounce = _is_bounce(msg)
             if not any(v in from_hdr for v in ALLOWED_FROMS) and not is_bounce:
-                con.close()
                 continue
 
             print(f"Received message {msg_id.decode() if hasattr(msg_id, 'decode') else msg_id}: {msg.get('subject')}")
             contacts = load_contacts()
-            _set_config_value(cur, "last_processed_at", msg_dt.isoformat())
-
-            if is_bounce:
-                bounced = _extract_bounce_recipients(msg)
-                for email in bounced:
-                    now = datetime.now(timezone.utc).isoformat()
-                    cur.execute(
-                        "UPDATE recipients SET unsubscribed=1, unsubscribed_at=?, updated_at=? WHERE email=?",
-                        (now, now, email),
-                    )
-                    print(f"Auto-unsubscribed bounce: {email}")
-                con.commit()
-                con.close()
-                imap.store(msg_id, "+FLAGS", "\\Seen")
-                continue
 
             if is_test:
                 sender = _extract_sender_email(msg)
                 if sender:
                     print(f"Test recipient detected; relaying only to sender {sender}")
                     mime_bytes = forward_test_message(raw, sender)
-                    smtp.sendmail(SMTP_USER, [sender], mime_bytes)
+                    smtp = connect_smtp()
+                    try:
+                        smtp.sendmail(SMTP_USER, [sender], mime_bytes)
+                    except Exception as e:
+                        print(f"Failed to send test mail: {str(e)}")
+                    finally:
+                        smtp.quit()
                 else:
                     print("Test recipient detected but no sender address found; skipping")
-                con.commit()
-                con.close()
                 imap.store(msg_id, "+FLAGS", "\\Seen")
                 time.sleep(random.uniform(*PER_MESSAGE_SLEEP_RANGE))
                 continue
 
             # Send in priority order
+            sent = 0
             for _rank, rcpt, token in contacts:
                 print(f"Sending to {rcpt}")
-                mime_bytes = forward_full_fidelity(raw, rcpt, token)
 
-                # Envelope sender can differ from header From:
-                smtp.sendmail(SMTP_USER, [rcpt], mime_bytes)
+                try:
+                    mime_bytes = forward_full_fidelity(raw, rcpt, token)
 
-                time.sleep(random.uniform(*PER_RCPT_SLEEP_RANGE))
+                    # Envelope sender can differ from header From:
+                    smtp = connect_smtp()
+                    try:
+                        smtp.sendmail(SMTP_USER, [rcpt], mime_bytes)
+                    except Exception as e:
+                        print(f"Failed to send mail: {str(e)}")
+                    finally:
+                        smtp.quit()
 
-            con.commit()
-            con.close()
-
-            # Mark as seen (optional)
-            imap.store(msg_id, "+FLAGS", "\\Seen")
+                    time.sleep(random.uniform(*PER_RCPT_SLEEP_RANGE))
+                except Exception as e:
+                    print(f"Exception sending to {rcpt}: " + str(e))
+                sent += 1
+                if sent % BATCH_SIZE == 0:
+                    time.sleep(random.uniform(*SLEEP_BETWEEN_BATCHES))
 
             time.sleep(random.uniform(*PER_MESSAGE_SLEEP_RANGE))
     except Exception as e:
         print("Exception: " + str(e))
     finally:
-        try: smtp.quit()
-        except Exception: pass
-        try: imap.logout()
-        except Exception: pass
+        try:
+            imap.logout()
+        except Exception:
+            pass
+        try:
+            con.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

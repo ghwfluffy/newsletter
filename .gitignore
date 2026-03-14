@@ -3,3 +3,4 @@ venv
 outfile.tmp
 config/tls
 config/list.db
+__pycache__

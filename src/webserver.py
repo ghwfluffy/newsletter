@@ -129,7 +129,7 @@ def sign(email_addr: str, token: str) -> str:
     return hmac.new(TOKEN_SECRET, msg, hashlib.sha256).hexdigest()
 
 
-@app.get("/unsub")
+@app.route("/unsub", methods=["GET", "POST"])
 def unsub():
     if request.method == "POST":
         e = (request.form.get("e") or "").lower()
@@ -142,6 +142,23 @@ def unsub():
 
     if not e or not t or not s:
         abort(400)
+
+    if t == "Test":
+        return f"""<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Confirm Unsubscribe</title></head>
+<body>
+  <h1>Test Unsubscribe</h1>
+  <p>This is a test. The unsubscribe page looks like this though.</p>
+  <form method="post" action="/unsub">
+    <input type="hidden" name="e" value="{e}">
+    <input type="hidden" name="t" value="{t}">
+    <input type="hidden" name="s" value="{s}">
+    <button type="submit">Confirm Unsubscribe</button>
+  </form>
+</body>
+</html>
+"""
 
     if not hmac.compare_digest(sign(e, t), s):
         abort(403)
@@ -159,7 +176,7 @@ def unsub():
 <body>
   <h1>Confirm Unsubscribe</h1>
   <p>Click confirm to stop receiving these emails.</p>
-  <form method="post" action="/spj/unsub">
+  <form method="post" action="/unsub">
     <input type="hidden" name="e" value="{e}">
     <input type="hidden" name="t" value="{t}">
     <input type="hidden" name="s" value="{s}">
