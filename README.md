@@ -130,7 +130,7 @@ Or run both services with watchdogs:
 The compose stack runs the web app under Gunicorn, runs the relay daemon as a separate long-running container, and puts Nginx in front of the web app for TLS, ACME HTTP-01 challenges, and static landing-page files from `www/`.
 
 Nginx proxies the newsletter app paths (`/unsub` and `/manage`) to Gunicorn. All other HTTPS paths are served from `www/`, with `www/index.html` as the site root and directory indexing disabled.
-The `www/cnnheros/index.html` page is served at `/cnnheros` and `/cnnheros/`.
+The `www/heroes/index.html` page is served at `/heroes` and `/heroes/`. The old typo paths `/heros`, `/cnnheros`, and `/cnnheroes` redirect to `/heroes`.
 
 Existing certificates should live at:
 ```bash
