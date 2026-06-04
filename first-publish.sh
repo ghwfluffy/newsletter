@@ -61,7 +61,7 @@ fi
 
 mkdir -p "$(dirname "${DEPLOY_DIR}")"
 
-if [[ "${GIT_REMOTE_URL}" == *github.com* ]]; then
+if [[ "${GIT_REMOTE_URL}" == git@github.com:* || "${GIT_REMOTE_URL}" == ssh://*github.com* ]]; then
   mkdir -p "${HOME}/.ssh"
   chmod 700 "${HOME}/.ssh"
   touch "${HOME}/.ssh/known_hosts"
