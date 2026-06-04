@@ -316,38 +316,6 @@
       word-break: break-word;
     }
 
-    .download-card {
-      display: grid;
-      min-height: 100%;
-    }
-
-    .download-preview {
-      display: grid;
-      place-items: center;
-      min-height: 180px;
-      padding: 24px;
-      color: #fff;
-      background: linear-gradient(135deg, var(--teal), #173f45);
-      text-align: center;
-    }
-
-    .download-preview strong {
-      max-width: 240px;
-      font-size: 1.05rem;
-    }
-
-    .download-link {
-      display: inline-flex;
-      margin-top: 12px;
-      padding: 8px 11px;
-      border-radius: var(--radius);
-      background: var(--ink);
-      color: #fff;
-      font-size: 0.86rem;
-      font-weight: 700;
-      text-decoration: none;
-    }
-
     .sources {
       padding: 46px 0 56px;
     }
@@ -752,8 +720,8 @@
         title: "Clothing Distribution in the Gymnasium",
         summary: "Clothing distribution is part of the practical support SPJ provides for families.",
         photos: [
-          ["pictures/19a clothing distributed.HEIC", "Clothing distributed", "Original HEIC photo supplied for clothing distribution.", "download"],
-          ["pictures/19b clothing distributed.HEIC", "Clothing distributed", "Original HEIC photo supplied for clothing distribution.", "download"]
+          ["pictures/19a clothing distributed.jpg", "Clothing distributed", "Clothing support prepared for distribution to families."],
+          ["pictures/19b clothing distributed.jpg", "Clothing distributed", "Clothing assistance organized as part of SPJ's practical support."]
         ]
       },
       {
@@ -796,24 +764,6 @@
       });
     }
 
-    function renderDownloadFigure(photo) {
-      const [src, title, description] = photo;
-      const figure = el("figure", "download-card");
-      const preview = el("div", "download-preview");
-      preview.appendChild(el("strong", "", "Original HEIC file"));
-      const caption = document.createElement("figcaption");
-      caption.appendChild(el("strong", "", title));
-      caption.appendChild(el("span", "", description));
-      const link = el("a", "download-link", "Download original");
-      link.href = src;
-      link.target = "_blank";
-      link.rel = "noopener";
-      caption.appendChild(link);
-      caption.appendChild(el("div", "file-note", src));
-      figure.append(preview, caption);
-      return figure;
-    }
-
     function renderPhotoFigure(photo) {
       const [src, title, description] = photo;
       const figure = document.createElement("figure");
@@ -848,7 +798,7 @@
 
         const gallery = el("div", "gallery");
         section.photos.forEach((photo) => {
-          gallery.appendChild(photo[3] === "download" ? renderDownloadFigure(photo) : renderPhotoFigure(photo));
+          gallery.appendChild(renderPhotoFigure(photo));
         });
         wrapper.append(head, gallery);
         photosRoot.appendChild(wrapper);
