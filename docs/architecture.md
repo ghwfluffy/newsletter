@@ -4,7 +4,7 @@
 The system has two long-running components:
 
 - Relay daemon (`src/replay-daemon.py`): polls IMAP, filters messages, and relays them via SMTP to recipients in SQLite. It appends a unique unsubscribe link for each recipient, enforces per-message send delay, respects rank-based priority, and resizes embedded/attached images to a fixed width.
-- Web app (`src/webserver.py`): HTTPS Flask server that receives unsubscribe requests and provides a basic admin UI for list management, protected by a static username/password.
+- Web app (`src/webserver.py`): Flask WSGI app that receives unsubscribe requests and provides a basic admin UI for list management, protected by a static username/password. In the Docker Compose deployment, Gunicorn runs the WSGI app and Nginx handles HTTPS ingress.
 
 Both services read from the same SQLite database.
 
@@ -83,6 +83,7 @@ Optional table if you want visibility into deliveries.
 
 ## Operational Notes
 - Run both components under a supervisor (systemd) with log rotation.
+- The Docker Compose web deployment serves `www/` through Nginx, proxies `/unsub` and `/manage` to Gunicorn, disables directory indexing, and stores ACME-issued certificates under `config/tls/<domain>/`.
 - Consider a separate dedicated IMAP mailbox.
 - Use consistent, concrete dates in any scheduled operations or incident notes.
 - TLS is managed by `init-tls.sh` and renewed via `acme.sh --cron`.

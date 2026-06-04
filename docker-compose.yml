@@ -1,0 +1,51 @@
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./config:/app/config
+    expose:
+      - "8000"
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx:/etc/nginx/newsletter:ro
+      - ./www:/usr/share/nginx/html:ro
+      - ./config/tls:/etc/nginx/tls:ro
+      - ./config/acme-challenge:/var/www/acme:ro
+    command: /bin/sh /etc/nginx/newsletter/start.sh
+
+  acme-renew:
+    image: neilpang/acme.sh:latest
+    restart: unless-stopped
+    entrypoint: /bin/sh
+    command: /scripts/renew.sh
+    environment:
+      NEWSMAIL_DOMAIN: ${NEWSMAIL_DOMAIN:-newsmail.spjinc.org}
+    volumes:
+      - ./docker/acme:/scripts:ro
+      - ./config/acme:/acme.sh
+      - ./config/tls:/tls
+      - ./config/acme-challenge:/var/www/acme
+
+  acme-init:
+    image: neilpang/acme.sh:latest
+    profiles:
+      - setup
+    entrypoint: /bin/sh
+    command: /scripts/issue.sh
+    environment:
+      NEWSMAIL_DOMAIN: ${NEWSMAIL_DOMAIN:-newsmail.spjinc.org}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./docker/acme:/scripts:ro
+      - ./config/acme:/acme.sh
+      - ./config/tls:/tls
+      - ./config/acme-challenge:/var/www/acme

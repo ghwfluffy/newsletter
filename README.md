@@ -126,6 +126,43 @@ Or run both services with watchdogs:
 ./go.sh
 ```
 
+## Docker Compose Web Deployment
+The compose stack runs the web app under Gunicorn and puts Nginx in front of it for TLS, ACME HTTP-01 challenges, and static landing-page files from `www/`.
+
+Nginx proxies the newsletter app paths (`/unsub` and `/manage`) to Gunicorn. All other HTTPS paths are served from `www/`, with `www/index.html` as the site root and directory indexing disabled.
+The `www/cnnheros/index.html` page is served at `/cnnheros` and `/cnnheros/`.
+
+Existing certificates should live at:
+```bash
+config/tls/newsmail.spjinc.org/fullchain.pem
+config/tls/newsmail.spjinc.org/privkey.pem
+```
+
+Start the web stack:
+```bash
+docker compose up -d --build nginx web acme-renew
+```
+
+If a certificate needs to be issued from scratch, make sure DNS points at this host and ports 80 and 443 are reachable, then run:
+```bash
+docker compose up -d --build nginx web
+ACME_EMAIL=admin@example.org docker compose --profile setup run --rm acme-init
+docker compose up -d acme-renew
+```
+
+The `acme-renew` service runs `acme.sh --cron` every 12 hours and writes renewed certs back into `config/tls/`. The Nginx container reloads itself every 6 hours so renewed cert files are picked up without replacing the container.
+
+Publish to the remote host:
+```bash
+cp .env.example .env
+./publish.sh
+```
+
+To reset/bootstrap the remote checkout, preserve existing mounted runtime state (`.env`, `config/config.json`, DB files, ACME state, and TLS files), initialize the database if missing, then run the normal publish flow:
+```bash
+./first-publish.sh
+```
+
 ## Operational Notes
 - SMTP throttling uses per-recipient sleeps in the relay daemon.
 - If `test.enabled` is `true`, the relay sends only to `test.contacts` instead of the subscribed recipients in SQLite.

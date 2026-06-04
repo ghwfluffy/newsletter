@@ -1,17 +1,17 @@
 {
   "imap": {
-    "host": "imap.mail.com",
+    "host": "imap.example.org",
     "port": 993,
-    "username": "receiver@example.com",
-    "password": "password",
-    "filter_recipient": "origin_sender@example.com"
+    "username": "newsletter@example.org",
+    "password": "CHANGE_ME",
+    "filter_recipient": "newsletter@example.org"
   },
   "smtp": {
-    "host": "smtp.mail.com",
+    "host": "smtp.example.org",
     "port": 587,
-    "username": "sender@example.com",
-    "password": "password",
-    "from": "Sender <sender@example.com>"
+    "username": "newsletter@example.org",
+    "password": "CHANGE_ME",
+    "from": "Newsletter <newsletter@example.org>"
   },
   "db": {
     "db_path": "${config}/list.db"
@@ -19,11 +19,11 @@
   "web": {
     "bind": "0.0.0.0",
     "port": 443,
-    "domain": "example.com",
+    "domain": "newsmail.spjinc.org",
     "tls_cert": "${config}/tls/${domain}/fullchain.pem",
     "tls_key": "${config}/tls/${domain}/privkey.pem",
-    "public_base_url": "https://example.com",
-    "token_secret": "changeme",
+    "public_base_url": "https://newsmail.spjinc.org",
+    "token_secret": "CHANGE_ME_TO_A_RANDOM_SECRET",
     "unsubscribe_path": "/unsub",
     "manage_path": "/manage",
     "admin_user": "admin",
@@ -37,9 +37,9 @@
     "between_batches_sleep_seconds": [300, 900]
   },
   "test": {
-    "enabled": true,
-    "contacts": ["testemail1@example.com"],
+    "enabled": false,
+    "contacts": ["test@example.org"],
     "test_db": "${config}/test.db",
-    "filter_recipient": "testsender@example.com"
+    "filter_recipient": "testsender@example.org"
   }
 }

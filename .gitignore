@@ -1,6 +1,11 @@
 *.swp
+.env
 venv
 outfile.tmp
+newsletter.tar
+config/config.json
+config/acme
+config/acme-challenge
 config/tls
 config/list.db
 config/test.db
