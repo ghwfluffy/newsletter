@@ -1,11 +1,20 @@
 services:
   web:
+    image: newsletter-app:latest
     build: .
     restart: unless-stopped
     volumes:
       - ./config:/app/config
     expose:
       - "8000"
+
+  relay:
+    image: newsletter-app:latest
+    build: .
+    restart: unless-stopped
+    command: ["python", "replay-daemon.py"]
+    volumes:
+      - ./config:/app/config
 
   nginx:
     image: nginx:1.27-alpine

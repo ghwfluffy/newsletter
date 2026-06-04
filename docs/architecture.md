@@ -3,7 +3,7 @@
 ## Overview
 The system has two long-running components:
 
-- Relay daemon (`src/replay-daemon.py`): polls IMAP, filters messages, and relays them via SMTP to recipients in SQLite. It appends a unique unsubscribe link for each recipient, enforces per-message send delay, respects rank-based priority, and resizes embedded/attached images to a fixed width.
+- Relay daemon (`src/replay-daemon.py`): polls IMAP, filters messages, and relays them via SMTP to recipients in SQLite. It appends a unique unsubscribe link for each recipient, enforces per-message send delay, respects rank-based priority, and resizes embedded/attached images to a fixed width. In the Docker Compose deployment, it runs as the `relay` service using the same image and mounted `config/` directory as the web app.
 - Web app (`src/webserver.py`): Flask WSGI app that receives unsubscribe requests and provides a basic admin UI for list management, protected by a static username/password. In the Docker Compose deployment, Gunicorn runs the WSGI app and Nginx handles HTTPS ingress.
 
 Both services read from the same SQLite database.

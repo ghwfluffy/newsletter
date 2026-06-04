@@ -40,5 +40,5 @@ fi
 
 mkdir -p "config/tls" "config/acme" "config/acme-challenge/.well-known/acme-challenge"
 
-docker compose up -d --build --remove-orphans nginx web acme-renew
+docker compose up -d --build --remove-orphans nginx web relay acme-renew
 REMOTE

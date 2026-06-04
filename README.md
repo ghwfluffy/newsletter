@@ -127,7 +127,7 @@ Or run both services with watchdogs:
 ```
 
 ## Docker Compose Web Deployment
-The compose stack runs the web app under Gunicorn and puts Nginx in front of it for TLS, ACME HTTP-01 challenges, and static landing-page files from `www/`.
+The compose stack runs the web app under Gunicorn, runs the relay daemon as a separate long-running container, and puts Nginx in front of the web app for TLS, ACME HTTP-01 challenges, and static landing-page files from `www/`.
 
 Nginx proxies the newsletter app paths (`/unsub` and `/manage`) to Gunicorn. All other HTTPS paths are served from `www/`, with `www/index.html` as the site root and directory indexing disabled.
 The `www/cnnheros/index.html` page is served at `/cnnheros` and `/cnnheros/`.
@@ -140,14 +140,14 @@ config/tls/newsmail.spjinc.org/privkey.pem
 
 Start the web stack:
 ```bash
-docker compose up -d --build nginx web acme-renew
+docker compose up -d --build nginx web relay acme-renew
 ```
 
 If a certificate needs to be issued from scratch, make sure DNS points at this host and ports 80 and 443 are reachable, then run:
 ```bash
 docker compose up -d --build nginx web
 ACME_EMAIL=admin@example.org docker compose --profile setup run --rm acme-init
-docker compose up -d acme-renew
+docker compose up -d relay acme-renew
 ```
 
 The `acme-renew` service runs `acme.sh --cron` every 12 hours and writes renewed certs back into `config/tls/`. The Nginx container reloads itself every 6 hours so renewed cert files are picked up without replacing the container.
