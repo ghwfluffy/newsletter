@@ -89,6 +89,18 @@ All config and secrets live in `config/config.json`, split into sections:
 ## Database
 SQLite file path is configurable in both the relay and web app. The expected schema is documented in `docs/architecture.md`.
 
+An operator can stage a targeted resend using the SQLite `config` key `pending_replay`.
+Its JSON value contains `uid`, `uidvalidity`, `message_id`, `recipient_ids`,
+`total_count`, `sent_count`, and `skipped_count`. Stage it while the relay is stopped,
+after backing up the database and cancelling the matching old SMTP queue entries.
+Starting the relay regenerates only those recipients' messages with the current code,
+including messages older than the normal 15-minute cutoff. It preserves the normal
+IMAP checkpoint, respects current unsubscribe status, and removes each recipient
+from the request after SMTP acceptance. Failed submissions remain pending. Delete
+the key to cancel a staged resend. SMTP acceptance does not guarantee final delivery.
+As with the normal relay, a crash between SMTP acceptance and the database update
+can cause a duplicate submission.
+
 ## Setup
 Initialize the database:
 ```bash

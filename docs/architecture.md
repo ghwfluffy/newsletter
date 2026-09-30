@@ -39,6 +39,19 @@ The schema below is the recommended baseline. The code should align with this.
 
 The `config` table stores operational state like `last_processed_at`, `last_uid`, message status timestamps, message type, and delivery progress counters.
 
+The optional `pending_replay` key stages an operator-selected resend. Its JSON value
+contains the source IMAP `uid`, mailbox `uidvalidity`, original `message_id`, ordered
+`recipient_ids`, and `total_count`, `sent_count`, and `skipped_count` counters. The
+relay processes this request before normal polling, verifies mailbox and message
+identity, and bypasses the age cutoff only for this source. It regenerates messages
+from the original MIME source and checks each recipient's current unsubscribe status.
+Recipients are removed from the request after SMTP acceptance or if no longer active;
+failed submissions stay pending, and the key is deleted when the request is exhausted.
+Normal IMAP checkpoints are preserved. Staging a request does not start the relay.
+Progress measures SMTP acceptance, not destination delivery. A crash between SMTP
+acceptance and saving progress can cause a duplicate; the two systems do not share
+a transaction.
+
 ### `send_log`
 Optional table if you want visibility into deliveries.
 - `id` INTEGER PRIMARY KEY

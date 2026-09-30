@@ -5,6 +5,7 @@ import ssl
 import smtplib
 import time
 import random
+import json
 from email import policy, encoders
 from email.parser import BytesParser
 from email.utils import getaddresses
@@ -398,10 +399,86 @@ def forward_test_message(raw_bytes: bytes, sender: str) -> bytes:
     return data
 
 
+def _finish_replay_recipient(recipient_id: int, sent: bool) -> None:
+    with sqlite3.connect(app_config.resolved_db_path) as con:
+        cur = con.cursor()
+        raw_request = _get_config_value(cur, "pending_replay")
+        if raw_request is None:
+            raise RuntimeError("Pending replay was removed during delivery")
+        request = json.loads(raw_request)
+        request["recipient_ids"].remove(recipient_id)
+        counter = "sent_count" if sent else "skipped_count"
+        request[counter] += 1
+        _set_config_value(cur, "last_delivery_sent_count", str(request["sent_count"]))
+        if request["recipient_ids"]:
+            _set_config_value(cur, "pending_replay", json.dumps(request))
+        else:
+            cur.execute("DELETE FROM config WHERE key='pending_replay'")
+
+
+def _process_pending_replay(imap) -> bool:
+    """Regenerate an explicitly staged recipient subset without rewinding IMAP."""
+    with sqlite3.connect(app_config.resolved_db_path) as con:
+        raw_request = _get_config_value(con.cursor(), "pending_replay")
+    if not raw_request:
+        return False
+    if app_config.test.enabled:
+        raise RuntimeError("Pending replay requires production mode")
+    request = json.loads(raw_request)
+    validity = imap.response("UIDVALIDITY")[1]
+    if not validity or validity[0].decode() != request["uidvalidity"]:
+        raise RuntimeError("Pending replay mailbox identity changed; operator review required")
+    status, fetched = imap.uid("fetch", str(request["uid"]), "(BODY.PEEK[])")
+    if status != "OK":
+        raise RuntimeError("Pending replay source message could not be fetched")
+    raw = b"".join(item[1] for item in fetched if isinstance(item, tuple))
+    msg = BytesParser(policy=policy.SMTP).parsebytes(raw)
+    if str(msg.get("Message-ID")) != request["message_id"]:
+        raise RuntimeError("Pending replay source message identity changed")
+    if app_config.imap.normalized_filter_recipient not in (msg.get("From") or "").lower():
+        raise RuntimeError("Pending replay source does not match the sender filter")
+
+    print(f"Processing pending replay for {len(request['recipient_ids'])} recipients")
+    for attempt, recipient_id in enumerate(request["recipient_ids"], start=1):
+        # Recheck unsubscribe status immediately before each submission.
+        with sqlite3.connect(app_config.resolved_db_path) as con:
+            row = con.execute(
+                "SELECT email, token FROM recipients WHERE id=? AND unsubscribed=0",
+                (recipient_id,),
+            ).fetchone()
+        if row is None:
+            _finish_replay_recipient(recipient_id, sent=False)
+            continue
+        rcpt, token = row
+        smtp = None
+        try:
+            mime_bytes = forward_full_fidelity(raw, rcpt, token)
+            smtp = connect_smtp()
+            smtp.sendmail(app_config.smtp.username, [rcpt], mime_bytes)
+        except Exception as error:
+            # SMTP errors can contain recipient addresses; log only the type.
+            print(f"Replay submission failed ({type(error).__name__}); retained for retry")
+        else:
+            # Save acceptance before closing SMTP, which can fail independently.
+            _finish_replay_recipient(recipient_id, sent=True)
+        finally:
+            if smtp is not None:
+                try:
+                    smtp.quit()
+                except Exception:
+                    smtp.close()
+        time.sleep(random.uniform(*app_config.relay.per_recipient_sleep_seconds))
+        if attempt % app_config.relay.batch_size == 0:
+            time.sleep(random.uniform(*app_config.relay.between_batches_sleep_seconds))
+    return True
+
+
 def main_loop():
     imap = connect_imap()
     con = None
     try:
+        if _process_pending_replay(imap):
+            return
         con = sqlite3.connect(app_config.resolved_db_path)
         cur = con.cursor()
         last_uid_raw = _get_config_value(cur, "last_uid")
