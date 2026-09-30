@@ -8,6 +8,8 @@ import random
 from email import policy, encoders
 from email.parser import BytesParser
 from email.utils import getaddresses
+from html import escape
+from html.parser import HTMLParser
 from io import BytesIO
 import sqlite3
 import hmac
@@ -155,6 +157,7 @@ def _resize_inline_images(msg) -> None:
         payload = part.get_payload(decode=True)
         if not payload:
             continue
+        filename = part.get_filename()
 
         try:
             with Image.open(BytesIO(payload)) as img:
@@ -186,17 +189,20 @@ def _resize_inline_images(msg) -> None:
             continue
 
         part.set_payload(jpeg_bytes)
-        part.replace_header("Content-Type", "image/jpeg")
+        part.set_type("image/jpeg")
         if "Content-Transfer-Encoding" in part:
             del part["Content-Transfer-Encoding"]
         encoders.encode_base64(part)
 
-        filename = part.get_filename() or ""
         if filename:
             if "." in filename:
                 filename = filename.rsplit(".", 1)[0]
             filename = f"{filename}.jpg"
-            part.set_param("filename", filename, header="Content-Disposition", replace=True)
+            part.set_param("name", filename, header="Content-Type")
+            if "Content-Disposition" in part:
+                part.set_param("filename", filename, header="Content-Disposition", replace=True)
+            else:
+                part.add_header("Content-Disposition", "inline", filename=filename)
 
 
 def _sign_unsub(email_addr: str, token: str) -> str:
@@ -219,6 +225,7 @@ def _insert_html_before_close(html: str, snippet: str) -> str:
 
 def _normalize_inline_content_ids(msg) -> None:
     replacements: dict[str, str] = {}
+    filenames: set[str] = set()
     for index, part in enumerate(msg.walk(), start=1):
         if "Content-ID" not in part:
             continue
@@ -229,6 +236,19 @@ def _normalize_inline_content_ids(msg) -> None:
         replacements[cid] = new_cid
         del part["Content-ID"]
         part._headers.append(("Content-ID", f"<{new_cid}>"))
+        if part.get_content_maintype() == "image":
+            filename = part.get_filename() or f"inline-{index}.{part.get_content_subtype()}"
+            stem, dot, extension = filename.rpartition(".")
+            suffix = 1
+            original = filename
+            while filename.casefold() in filenames:
+                filename = f"{stem}-{suffix}.{extension}" if dot else f"{original}-{suffix}"
+                suffix += 1
+            filenames.add(filename.casefold())
+            part.set_param("name", filename, header="Content-Type")
+            if "Content-Disposition" in part:
+                del part["Content-Disposition"]
+            part.add_header("Content-Disposition", "inline", filename=filename)
 
     if not replacements:
         return
@@ -244,6 +264,64 @@ def _normalize_inline_content_ids(msg) -> None:
             updated = updated.replace(f"[cid:{old_cid}]", f"[cid:{new_cid}]")
         if updated != text:
             part.set_content(updated, subtype=subtype, charset=part.get_content_charset() or "utf-8")
+
+
+class _ResponsiveImages(HTMLParser):
+    """Replace image tags without reserializing the surrounding email HTML."""
+
+    def __init__(self, html: str):
+        super().__init__(convert_charrefs=False)
+        self.html = html
+        self.line_offsets = [0]
+        self.line_offsets.extend(match.end() for match in re.finditer("\n", html))
+        self.edits: list[tuple[int, int, str]] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "img":
+            return
+        attributes = dict(attrs)
+        # Keep the original display width as a ceiling, capped at our image size.
+        width = attributes.get("width") or ""
+        limit = INLINE_IMAGE_WIDTH
+        if width.isascii() and width.isdigit() and int(width) > 0:
+            limit = min(int(width), limit)
+        styles = []
+        for declaration in (attributes.get("style") or "").split(";"):
+            name, separator, _value = declaration.partition(":")
+            if separator and name.strip().lower() not in {
+                "width", "height", "min-width", "min-height", "max-width", "max-height"
+            }:
+                styles.append(declaration.strip())
+        styles.extend(["width:100%", f"max-width:{limit}px", "height:auto"])
+        attributes.pop("height", None)
+        attributes["width"] = str(limit)
+        attributes["style"] = ";".join(styles)
+        rendered = " ".join(
+            key if value is None else f'{key}="{escape(value, quote=True)}"'
+            for key, value in attributes.items()
+        )
+        raw = self.get_starttag_text()
+        line, column = self.getpos()
+        start = self.line_offsets[line - 1] + column
+        self.edits.append((start, start + len(raw), f"<img {rendered}>"))
+
+    def render(self) -> str:
+        self.feed(self.html)
+        self.close()
+        html = self.html
+        for start, end, replacement in reversed(self.edits):
+            html = html[:start] + replacement + html[end:]
+        return html
+
+
+def _make_images_responsive(msg) -> None:
+    for part in msg.walk():
+        if part.get_content_type() != "text/html":
+            continue
+        html = part.get_content()
+        updated = _ResponsiveImages(html).render()
+        if updated != html:
+            part.set_content(updated, subtype="html", charset=part.get_content_charset() or "utf-8")
 
 
 def _append_unsub(msg, link: str):
@@ -301,6 +379,7 @@ def forward_full_fidelity(raw_bytes: bytes, rcpt: str, token: str):
     set_or_replace(msg, "List-Unsubscribe", f"<{unsub_link}>")
     _append_unsub(msg, unsub_link)
     _normalize_inline_content_ids(msg)
+    _make_images_responsive(msg)
     data = msg.as_bytes(policy=policy.SMTP)
     return data
 
