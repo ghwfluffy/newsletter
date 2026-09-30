@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Sign up for SPJ newsletter updates or manage your email subscription.">
+  <title>{% block title %}SPJ Newsletter{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('public.static', filename='newsletter.css') }}">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="{{ url_for('public.home') }}" aria-label="SPJ newsletter home"><span class="brand-mark">SPJ</span><span>Siguiendo los Pasos de Jesus</span></a>
+    <a class="org-link" href="https://www.spjinc.org/" rel="noreferrer">Visit SPJ <span aria-hidden="true">&nearr;</span></a>
+  </header>
+  <main id="main">{% block content %}{% endblock %}</main>
+  <footer class="site-footer">
+    <span>SPJ &middot; Staying connected. Helping others.</span>
+    <nav aria-label="Footer"><a href="{{ url_for('public.home') }}">Subscribe</a><a href="{{ url_for('public.unsubscribe_link') }}">Unsubscribe</a><a href="{{ url_for('public.privacy') }}">Privacy policy</a><a href="https://www.spjinc.org/" rel="noreferrer">About SPJ</a></nav>
+  </footer>
+</body>
+</html>

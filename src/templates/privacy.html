@@ -1,0 +1,29 @@
+{% extends "newsletter-base.html" %}
+{% block title %}Newsletter privacy policy | SPJ{% endblock %}
+{% block content %}
+<article class="content-card policy">
+  <p class="eyebrow">YOUR INFORMATION</p>
+  <h1>Newsletter privacy policy</h1>
+  <p class="policy-date">Effective September 30, 2026</p>
+  <p>This policy covers the SPJ newsletter and the subscription pages at <strong>newsmail.spjinc.org</strong>, operated for Siguiendo los Pasos de Jesus (SPJ). It describes this newsletter service; it does not cover other websites or donation services linked from our emails.</p>
+  <h2>Information used by this service</h2>
+  <p>We collect the email address you enter, your subscription preference, and the times you request and confirm a change. We keep the wording and policy version associated with an online subscription confirmation. Existing mailing-list records may also include a name and subscription history provided to SPJ.</p>
+  <p>For security and troubleshooting, the web and email servers process technical information such as IP addresses, request times, requested page paths, and mail delivery results. The forms use a coded version of your IP address to limit repeated requests.</p>
+  <h2>Why we use it</h2>
+  <p>We use this information to send requested confirmation emails and SPJ newsletters, manage subscriptions and unsubscribe requests, record your choices, and protect the service from misuse. Newsletters may include community updates, photos, events, and fundraising news.</p>
+  <h2>Your subscription choice</h2>
+  <p>New online subscriptions require an email confirmation. Submitting a signup form alone does not add a new address to the active list. Existing subscribers who previously requested the newsletter through SPJ, including by word of mouth, remain subscribed unless they opt out.</p>
+  <p>You can unsubscribe using the link in a newsletter or <a href="{{ url_for('public.unsubscribe_link') }}">request an unsubscribe link here</a>. No account or password is required. Unsubscribing stops future newsletter submissions; a message already in delivery may still arrive.</p>
+  <h2>Who processes the information</h2>
+  <p>SPJ staff and authorized administrators can access subscription records to manage the newsletter. The hosting and email services we use process information needed to operate the site and deliver messages. Your email provider also processes messages delivered to you. Subscription records are not published on this website.</p>
+  <h2>How long records remain</h2>
+  <p>We keep active subscription records while an address is subscribed. After an unsubscribe, we retain a suppression record so the address is not included in future newsletters. We retain confirmation history to record subscription choices.</p>
+  <p>Short-lived form requests and their coded IP identifiers are removed from the active request table after seven days during routine request processing. Confirmation links expire after 24 hours. Server logs and restricted operational backups may retain records separately from the active database.</p>
+  <h2>Cookies and external links</h2>
+  <p>The forms use an essential session cookie to protect against forged submissions. These newsletter pages do not include advertising trackers or third-party analytics. Links to SPJ's main website or other sites take you to services with their own practices.</p>
+  <h2>Access, corrections, and removal</h2>
+  <p>To ask about your newsletter records, correct an address, or request deletion beyond unsubscribing, <a href="https://www.spjinc.org/contact" rel="noreferrer">contact SPJ</a>. Please identify the email address concerned. We may ask you to verify control of that address before changing or disclosing records.</p>
+  <h2>Changes to this policy</h2>
+  <p>Updates will be published on this page with a revised effective date.</p>
+</article>
+{% endblock %}

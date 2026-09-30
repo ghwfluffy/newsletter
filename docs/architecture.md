@@ -8,6 +8,11 @@ The system has two long-running components:
 
 Both services read from the same SQLite database.
 
+The optional `confirmations` Compose service runs `src/subscription-mailer.py`.
+It handles only requested signup/unsubscribe confirmation emails and can run while
+the newsletter relay is stopped. The public homepage and `/privacy` are Flask
+templates. Nginx proxies these routes over HTTPS; other static content remains in `www/`.
+
 ## Data Flow
 1. IMAP poll: the relay daemon connects to IMAP and checks for new messages.
 2. Filter: if the message matches the configured sender or is a bounce, it is eligible for processing.
@@ -61,6 +66,28 @@ Optional table if you want visibility into deliveries.
 - `status` TEXT NOT NULL
 - `error` TEXT
 
+### Public subscription records
+
+`subscription_requests` is a short-lived outbox with a random request ID, email,
+action (`subscribe` or `unsubscribe`), keyed hash of the requesting IP, request and
+expiry timestamps, worker claim/retry timestamps, SMTP acceptance timestamp,
+confirmation timestamp, attempt count, and policy version. Links are HMAC-signed
+using `web.token_secret`; raw bearer tokens are not stored. A worker claim prevents
+simultaneous sends by multiple worker instances. SMTP failures retry after ten minutes.
+A crash after SMTP acceptance but before saving the result can send a duplicate
+confirmation, which cannot activate a subscription without the recipient's confirmation.
+
+`subscription_events` records the email, action, request/confirmation timestamps,
+policy version, and consent wording for confirmed web changes. The app creates these
+tables if missing without modifying existing recipient status. A pending signup is
+not an active recipient; GET requests never change subscription state. Confirmation
+POSTs update recipients and consent history in one transaction. Unsubscribe links
+already included in newsletters retain their existing behavior.
+
+The service prunes request records older than seven days during routine processing.
+Subscription and suppression records and confirmation history remain for newsletter
+administration. Access/correction/deletion requests use SPJ's contact page.
+
 ## Config Files
 - `config/config.json` is the single runtime config file.
 - The `imap` section stores IMAP polling settings and the sender filter (`filter_recipient`, string).
@@ -68,6 +95,9 @@ Optional table if you want visibility into deliveries.
 - The `relay` section stores poll interval and relay throttling delays.
 - The `db` section stores the SQLite path (`${config}/list.db`).
 - The `web` section stores HTTPS bind, domain, public base URL, admin credentials, token secret, unsubscribe path, and manage path.
+- `web.confirmation_email_enabled` defaults to `false`. When enabled, the separately
+  started `confirmations` worker uses the existing SMTP settings to deliver form
+  confirmation emails. It does not read `pending_replay` or the IMAP mailbox.
 - The `test` section stores an optional test-mode switch, override recipient list, test-only sender filter override, and test-only DB override.
 - `config/schema.sql` initializes the database.
 
@@ -90,9 +120,10 @@ Optional table if you want visibility into deliveries.
 - Test-mode contacts use the non-destructive `"Test"` unsubscribe token.
 
 ## Security
-- The Compose relay uses the fixed address `172.18.0.10` on `172.18.0.0/24`;
+- The Compose relay uses the fixed address `172.18.0.10` and the confirmation worker
+  uses `172.18.0.11` on `172.18.0.0/24`;
   dynamic addresses are restricted to `172.18.0.128/25`. Host Postfix permits this
-  relay address, and OpenDKIM includes it in `InternalHosts` to select signing
+  two sender addresses, and OpenDKIM includes them in `InternalHosts` to select signing
   instead of verification. Keep these host settings aligned with Compose.
 - The relay removes original DKIM, legacy DomainKey, ARC, and Authentication-Results
   headers before modifying a newsletter. Host OpenDKIM signs the final MIME bytes
@@ -103,10 +134,17 @@ Optional table if you want visibility into deliveries.
 - Admin UI uses bcrypt hash stored in `config/config.json` under `web.admin_pass_bcrypt`.
 - Web app must be served only over HTTPS.
 - Keep secrets out of version control.
+- Public forms use secure session cookies, CSRF tokens, validation, rate limits,
+  and a honeypot. Confirmation pages do not expose recipient addresses, use
+  `Referrer-Policy: no-referrer`, and disable caching. Nginx and Gunicorn access logs
+  exclude query strings so secret links and email addresses are not logged.
 
 ## Operational Notes
 - Run both components under a supervisor (systemd) with log rotation.
-- The Docker Compose web deployment serves `www/` through Nginx, proxies `/unsub` and `/manage` to Gunicorn, disables directory indexing, and stores ACME-issued certificates under `config/tls/<domain>/`.
+- The Docker Compose deployment proxies the public subscription pages and the
+  existing unsubscribe/admin routes to Gunicorn, serves other `www/` content through
+  Nginx, disables directory indexing, and stores ACME certificates under
+  `config/tls/<domain>/`.
 - Consider a separate dedicated IMAP mailbox.
 - Use consistent, concrete dates in any scheduled operations or incident notes.
 - TLS is managed by `init-tls.sh` and renewed via `acme.sh --cron`.

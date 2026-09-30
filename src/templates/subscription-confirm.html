@@ -1,0 +1,15 @@
+{% extends "newsletter-base.html" %}
+{% block title %}Confirm your preference | SPJ Newsletter{% endblock %}
+{% block content %}
+<section class="content-card narrow">
+  <p class="eyebrow">ONE LAST STEP</p>
+  <h1>{{ 'Confirm your subscription.' if action == 'subscribe' else 'Confirm unsubscribe.' }}</h1>
+  <p>{{ 'Select Confirm to receive SPJ newsletter updates about our work, events, and fundraising.' if action == 'subscribe' else 'Select Confirm to stop receiving SPJ newsletter emails.' }}</p>
+  <form method="post" action="{{ url_for('public.confirm') }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="t" value="{{ token }}">
+    <button type="submit">{{ 'Confirm subscription' if action == 'subscribe' else 'Confirm unsubscribe' }}</button>
+  </form>
+  <p class="form-note">If you did not request this, you can close this page. Nothing changes until you confirm.</p>
+</section>
+{% endblock %}

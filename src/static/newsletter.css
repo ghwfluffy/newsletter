@@ -1,0 +1,51 @@
+:root{color-scheme:light;--paper:#f6f3ec;--ink:#193e36;--muted:#596b63;--line:#d7dfd6;--accent:#cfdba0;--white:#fffefb}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+a{color:inherit;text-underline-offset:4px}
+a:hover{text-decoration-thickness:2px}
+.site-header,.site-footer{max-width:1240px;margin:auto;padding:28px 48px;display:flex;align-items:center;justify-content:space-between;gap:24px}
+.brand{display:flex;align-items:center;gap:14px;text-decoration:none;font-size:12px;font-weight:600;letter-spacing:.025em}
+.brand-mark{display:grid;place-items:center;width:56px;height:56px;border:1px solid var(--ink);border-radius:50%;font:bold 20px Georgia,serif;letter-spacing:-1px;flex-shrink:0}
+.org-link{font-size:13px;white-space:nowrap}
+main{max-width:1240px;margin:0 auto;padding:52px 48px 80px;min-height:65vh}
+.home-layout{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:72px;align-items:start}
+.home-layout>*{min-width:0}
+.eyebrow,.small-label,.step-label{font-size:11px;letter-spacing:.16em;font-weight:700}
+.eyebrow{margin:0 0 24px}
+h1{font:normal clamp(38px,4.5vw,62px)/1.12 Georgia,"Times New Roman",serif;letter-spacing:-.035em;margin:0 0 26px}
+h1 em{font-weight:normal;color:#617c4e}
+.intro-copy{font-size:17px;max-width:420px;color:var(--muted);margin:26px 0 36px}
+.expectations{border-top:1px solid var(--line);padding-top:23px;max-width:420px}
+.expectations p{font-size:13px;color:var(--muted);margin:8px 0}
+.form-card{background:var(--white);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 36px #193e3609;overflow:hidden}
+.form-tabs{display:flex;border-bottom:1px solid var(--line)}
+.form-tabs a{width:50%;text-align:center;padding:18px 12px;font-size:14px;text-decoration:none;color:var(--muted);border-bottom:3px solid transparent}
+.form-tabs a[aria-current=page]{background:#f0f3e9;border-color:var(--ink);color:var(--ink);font-weight:650}
+.card-content{padding:34px}
+.step-label{font-size:10px;color:var(--muted)}
+h2{font:normal 29px/1.2 Georgia,serif;margin:17px 0}
+.card-content>p{font-size:14px;color:var(--muted)}
+form{margin-top:24px}
+.field-label{font-size:13px;font-weight:650;display:block;margin-bottom:8px}
+input[type=email]{width:100%;min-height:50px;background:var(--white);border:1px solid #a7b6aa;border-radius:6px;padding:13px;font:inherit;color:var(--ink)}
+input:focus-visible,button:focus-visible,a:focus-visible{outline:3px solid #799347;outline-offset:4px}
+.consent{display:flex;align-items:flex-start;gap:10px;font-size:12px;line-height:1.6;margin:19px 0;color:var(--muted);cursor:pointer}
+.consent input{margin-top:4px;min-width:17px;height:17px;accent-color:var(--ink)}
+button{display:flex;justify-content:center;align-items:center;gap:20px;width:100%;min-height:50px;background:var(--ink);color:white;border:0;border-radius:6px;padding:13px 18px;font:600 14px/1.5 system-ui;cursor:pointer;margin-top:22px}
+button:hover{background:#295247}
+.form-note{font-size:12px!important;color:var(--muted);margin-top:20px}
+.error,.notice{padding:12px 14px;border-radius:5px;background:#f5e8dc;color:#7b321b!important;font-size:14px}
+.honey{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
+.site-footer{border-top:1px solid var(--line);font-size:11px;color:var(--muted);padding-top:25px;padding-bottom:30px}
+.site-footer nav{display:flex;gap:20px;flex-wrap:wrap}
+.content-card{background:var(--white);padding:48px;border:1px solid var(--line);border-radius:14px;margin:0 auto}
+.narrow{max-width:660px}
+.narrow h1{font-size:44px}
+.content-card p{color:var(--muted)}
+.policy{max-width:820px}
+.policy h1{font-size:48px}
+.policy h2{font-size:26px;margin-top:32px}
+.policy-date{font-size:13px}
+.text-link{display:inline-block;margin-top:18px;font-size:14px;font-weight:600}
+@media(max-width:820px){.site-header,.site-footer{padding:22px 24px}.home-layout{grid-template-columns:minmax(0,1fr);gap:32px}main{padding:28px 24px 50px}.intro h1{font-size:42px}.intro h1 br{display:none}.intro-copy{max-width:550px;margin:22px 0}.expectations{display:none}.form-card{max-width:560px;width:100%}.card-content{padding:26px}.site-footer{align-items:flex-start;flex-direction:column;gap:14px}.content-card{padding:30px}.brand>span:last-child{max-width:135px;font-size:11px}.policy h1,.narrow h1{font-size:36px}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}

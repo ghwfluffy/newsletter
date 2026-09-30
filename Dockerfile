@@ -18,4 +18,4 @@ WORKDIR /app/src
 
 EXPOSE 8000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--access-logfile", "-", "--error-logfile", "-", "webserver:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--access-logfile", "-", "--access-logformat", "%(h)s %(m)s %(U)s %(s)s", "--error-logfile", "-", "webserver:app"]

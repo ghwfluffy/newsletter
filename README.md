@@ -64,6 +64,7 @@ All config and secrets live in `config/config.json`, split into sections:
     "tls_cert": "${config}/tls/${domain}/fullchain.pem",
     "tls_key": "${config}/tls/${domain}/privkey.pem",
     "public_base_url": "https://listenserver.com",
+    "confirmation_email_enabled": false,
     "token_secret": "CHANGE_ME_TO_RANDOM_32B+",
     "unsubscribe_path": "/unsub",
     "manage_path": "/manage",
@@ -88,6 +89,9 @@ All config and secrets live in `config/config.json`, split into sections:
 
 ## Database
 SQLite file path is configurable in both the relay and web app. The expected schema is documented in `docs/architecture.md`.
+
+The web app creates `subscription_requests` and `subscription_events` on startup
+if they do not exist. Existing recipient records and subscription status are preserved.
 
 An operator can stage a targeted resend using the SQLite `config` key `pending_replay`.
 Its JSON value contains `uid`, `uidvalidity`, `message_id`, `recipient_ids`,
@@ -139,13 +143,14 @@ Or run both services with watchdogs:
 ```
 
 ## Docker Compose Web Deployment
-The compose stack runs the web app under Gunicorn, runs the relay daemon as a separate long-running container, and puts Nginx in front of the web app for TLS, ACME HTTP-01 challenges, and static landing-page files from `www/`.
+The compose stack runs the web app under Gunicorn, runs the relay daemon as a separate long-running container, and puts Nginx in front of the web app for TLS, ACME HTTP-01 challenges, and static files from `www/`.
 
 The Compose network reserves `172.18.0.0/24`; automatic container addresses use
-`172.18.0.128/25`, and the relay always uses `172.18.0.10`. Ensure this subnet does
+`172.18.0.128/25`, the relay uses `172.18.0.10`, and the confirmation worker uses
+`172.18.0.11`. Ensure this subnet does
 not overlap another host network. When using host Postfix through
-`host.docker.internal:25`, include `172.18.0.10` in OpenDKIM's `InternalHosts` and
-`172.18.0.10/32` in Postfix's `mynetworks`, alongside localhost. OpenDKIM must sign
+`host.docker.internal:25`, include `172.18.0.10` and `172.18.0.11` in OpenDKIM's
+`InternalHosts` and their `/32` addresses in Postfix's `mynetworks`, alongside localhost. OpenDKIM must sign
 the final outgoing message using the domain in the visible From header. Set
 Postfix's `milter_default_action = tempfail` so a signing-service outage temporarily
 rejects submissions instead of allowing unsigned mail. The relay removes original DKIM/ARC
@@ -153,7 +158,11 @@ signatures and authentication results because it changes the message content.
 Host Postfix/OpenDKIM configuration and signing keys are managed separately from
 Compose; private keys must never be committed.
 
-Nginx proxies the newsletter app paths (`/unsub` and `/manage`) to Gunicorn. All other HTTPS paths are served from `www/`, with `www/index.html` as the site root and directory indexing disabled.
+Nginx proxies `/`, `/privacy`, `/subscribe`, `/unsubscribe`, `/confirm`,
+`/request-saved`, `/newsletter-assets/`, and the existing unsubscribe/admin paths
+to Gunicorn over HTTPS. Other paths serve static files from `www/` with directory
+indexing disabled. Access logs record paths without query strings to avoid logging
+email addresses or secret confirmation/unsubscribe links.
 The `www/heroes/index.html` page is served at `/heroes` and `/heroes/`. The old typo paths `/heros`, `/cnnheros`, and `/cnnheroes` redirect to `/heroes`.
 
 Existing certificates should live at:
@@ -166,6 +175,37 @@ Start the web stack:
 ```bash
 docker compose up -d --build nginx web relay acme-renew
 ```
+
+### Public signup and unsubscribe without the newsletter relay
+
+The homepage offers signup and unsubscribe requests. Both send an email link to
+verify control of the address; opening a link does not change preferences until
+the recipient presses Confirm. New addresses are added to the active list only
+after confirmation. Existing subscriptions remain unchanged, including subscriptions
+previously requested directly from SPJ. Existing signed newsletter unsubscribe links
+continue to work without requiring a second email.
+
+Set `web.confirmation_email_enabled` to `true` to enable the separate outbox worker
+(default `false`). It uses the existing SMTP configuration and never processes
+newsletters or `pending_replay`. Run only the website and confirmation workflow:
+
+```bash
+docker compose --profile confirmations up -d --build web nginx confirmations acme-renew
+```
+
+Host Postfix and OpenDKIM must be running to deliver confirmations when using
+host SMTP. Keep `relay` stopped to leave staged newsletter replays paused.
+Setting `confirmation_email_enabled` to `false` requires recreating web/confirmation
+containers to reload configuration; requests can still be saved, and the site
+displays a delivery-delay notice. This does not cancel mail already queued in Postfix.
+
+The forms require CSRF protection and apply a honeypot, one request per email per
+hour, ten accepted requests per IP per hour, and a global limit of 100 per day.
+Responses do not disclose whether an email is on the list. Confirmation links are
+valid for 24 hours after preparation. Request records expire after seven days;
+confirmed choices are recorded separately with the consent wording and policy version.
+The privacy policy at `/privacy` covers this newsletter service and links to SPJ's
+contact page for record access, correction, or deletion requests.
 
 If a certificate needs to be issued from scratch, make sure DNS points at this host and ports 80 and 443 are reachable, then run:
 ```bash

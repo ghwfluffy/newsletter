@@ -11,11 +11,13 @@ import html
 from datetime import datetime, timezone
 import bcrypt
 from config import load_config
+from subscriptions import register_public_routes
 
 
 app_config = load_config()
 
 app = Flask(__name__)
+register_public_routes(app, app_config)
 
 
 def _now_iso() -> str:

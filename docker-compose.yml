@@ -8,6 +8,20 @@ services:
     expose:
       - "8000"
 
+  confirmations:
+    image: newsletter-app:latest
+    build: .
+    profiles: [confirmations]
+    restart: unless-stopped
+    command: ["python", "subscription-mailer.py"]
+    volumes:
+      - ./config:/app/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      default:
+        ipv4_address: 172.18.0.11
+
   relay:
     image: newsletter-app:latest
     build: .

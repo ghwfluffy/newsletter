@@ -101,6 +101,7 @@ class WebConfig:
     manage_path: str
     admin_user: str
     admin_pass_bcrypt: str
+    confirmation_email_enabled: bool = False
 
     @property
     def resolved_tls_cert(self) -> str:
@@ -194,6 +195,7 @@ class AppConfig:
                 manage_path=web_raw["manage_path"],
                 admin_user=web_raw["admin_user"],
                 admin_pass_bcrypt=web_raw["admin_pass_bcrypt"],
+                confirmation_email_enabled=bool(web_raw.get("confirmation_email_enabled", False)),
             ),
             relay=RelayConfig(
                 poll_seconds=int(relay_raw["poll_seconds"]),
