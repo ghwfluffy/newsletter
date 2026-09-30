@@ -356,6 +356,15 @@ def _append_unsub(msg, link: str):
 def forward_full_fidelity(raw_bytes: bytes, rcpt: str, token: str):
     msg = BytesParser(policy=policy.SMTP).parsebytes(raw_bytes)
 
+    # These authenticate the original message, which we are about to modify.
+    # The outbound MTA signs the final per-recipient message after serialization.
+    for header in (
+        "DKIM-Signature", "DomainKey-Signature", "Authentication-Results",
+        "ARC-Seal", "ARC-Message-Signature", "ARC-Authentication-Results",
+    ):
+        if header in msg:
+            del msg[header]
+
     # Minimal header surgery (preserves MIME parts/attachments)
     _resize_inline_images(msg)
     # 1) Ensure single recipient in To:

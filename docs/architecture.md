@@ -90,6 +90,16 @@ Optional table if you want visibility into deliveries.
 - Test-mode contacts use the non-destructive `"Test"` unsubscribe token.
 
 ## Security
+- The Compose relay uses the fixed address `172.18.0.10` on `172.18.0.0/24`;
+  dynamic addresses are restricted to `172.18.0.128/25`. Host Postfix permits this
+  relay address, and OpenDKIM includes it in `InternalHosts` to select signing
+  instead of verification. Keep these host settings aligned with Compose.
+- The relay removes original DKIM, legacy DomainKey, ARC, and Authentication-Results
+  headers before modifying a newsletter. Host OpenDKIM signs the final MIME bytes
+  with the sender domain's private key; the matching public key is published in DNS.
+  Postfix uses `milter_default_action = tempfail` to defer submissions when the
+  signing filter is unavailable. SMTP acceptance still does not guarantee inbox
+  delivery or resolve a provider's sending-IP restrictions.
 - Admin UI uses bcrypt hash stored in `config/config.json` under `web.admin_pass_bcrypt`.
 - Web app must be served only over HTTPS.
 - Keep secrets out of version control.

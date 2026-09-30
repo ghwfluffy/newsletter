@@ -141,6 +141,18 @@ Or run both services with watchdogs:
 ## Docker Compose Web Deployment
 The compose stack runs the web app under Gunicorn, runs the relay daemon as a separate long-running container, and puts Nginx in front of the web app for TLS, ACME HTTP-01 challenges, and static landing-page files from `www/`.
 
+The Compose network reserves `172.18.0.0/24`; automatic container addresses use
+`172.18.0.128/25`, and the relay always uses `172.18.0.10`. Ensure this subnet does
+not overlap another host network. When using host Postfix through
+`host.docker.internal:25`, include `172.18.0.10` in OpenDKIM's `InternalHosts` and
+`172.18.0.10/32` in Postfix's `mynetworks`, alongside localhost. OpenDKIM must sign
+the final outgoing message using the domain in the visible From header. Set
+Postfix's `milter_default_action = tempfail` so a signing-service outage temporarily
+rejects submissions instead of allowing unsigned mail. The relay removes original DKIM/ARC
+signatures and authentication results because it changes the message content.
+Host Postfix/OpenDKIM configuration and signing keys are managed separately from
+Compose; private keys must never be committed.
+
 Nginx proxies the newsletter app paths (`/unsub` and `/manage`) to Gunicorn. All other HTTPS paths are served from `www/`, with `www/index.html` as the site root and directory indexing disabled.
 The `www/heroes/index.html` page is served at `/heroes` and `/heroes/`. The old typo paths `/heros`, `/cnnheros`, and `/cnnheroes` redirect to `/heroes`.
 

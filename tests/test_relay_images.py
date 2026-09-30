@@ -43,6 +43,26 @@ def image_part(filename, cid, color, width=900):
 
 
 class RelayImageTests(unittest.TestCase):
+    def test_forwarding_removes_original_authentication_headers(self):
+        message = EmailMessage()
+        message["From"] = "sender@example.com"
+        message["Message-ID"] = "<original@example.com>"
+        stale_headers = (
+            "DKIM-Signature", "DomainKey-Signature", "Authentication-Results",
+            "ARC-Seal", "ARC-Message-Signature", "ARC-Authentication-Results",
+        )
+        for header in stale_headers:
+            message[header] = "original-authentication"
+        message["DKIM-Signature"] = "second-original-signature"
+        message.set_content("Original newsletter")
+        forwarded = BytesParser(policy=policy.default).parsebytes(
+            relay.forward_full_fidelity(message.as_bytes(), "reader@example.com", "test")
+        )
+        for header in stale_headers:
+            self.assertNotIn(header, forwarded)
+        self.assertEqual(forwarded["Message-ID"], "<original@example.com>")
+        self.assertIn("List-Unsubscribe", forwarded)
+
     def test_resize_preserves_filename_before_replacing_content_type(self):
         part = image_part("photo.png", "photo", "red")
         relay._resize_inline_images(part)

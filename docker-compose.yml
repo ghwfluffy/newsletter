@@ -15,6 +15,11 @@ services:
     command: ["python", "replay-daemon.py"]
     volumes:
       - ./config:/app/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      default:
+        ipv4_address: 172.18.0.10
 
   nginx:
     image: nginx:1.27-alpine
@@ -58,3 +63,10 @@ services:
       - ./config/acme:/acme.sh
       - ./config/tls:/tls
       - ./config/acme-challenge:/var/www/acme
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.18.0.0/24
+          ip_range: 172.18.0.128/25
