@@ -213,6 +213,8 @@ def manage():
                             (_now_iso(), domain))
                 message = f"Hold removed for {domain}. Queued messages will retry automatically."
             else:
+                # Serialize duplicate clicks across Gunicorn workers.
+                cur.execute("BEGIN IMMEDIATE")
                 if not cur.execute("SELECT 1 FROM domain_blocks WHERE domain=? AND released_at IS NULL", (domain,)).fetchone():
                     con.close()
                     abort(400, description="Hold the domain before requesting a test.")
