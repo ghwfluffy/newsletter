@@ -48,8 +48,8 @@ def _remember_newsletter(message_id: str, uid: str = "", uidvalidity: str = "") 
 def _permanent_mailbox_failure(dsn: str, diagnostic: str) -> bool:
     # RFC 3463: unknown mailbox or permanently disabled mailbox. Never classify
     # all 5xx responses as dead recipients: policy/IP blocks also use 5xx.
-    if policy_failure(dsn, diagnostic) or re.search(r"\b(access denied|rate limit)\b",
-                                                  diagnostic, re.IGNORECASE):
+    if (policy_failure(dsn, diagnostic)
+            or re.search(r"\b(access denied|rate limit)\b", diagnostic, re.IGNORECASE)):
         return False
     if dsn in {"5.1.1", "5.2.1"}:
         return True
