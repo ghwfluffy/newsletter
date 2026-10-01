@@ -8,7 +8,7 @@ import random
 import json
 from email import policy, encoders
 from email.parser import BytesParser
-from email.utils import getaddresses
+from email.utils import getaddresses, make_msgid
 from html import escape
 from html.parser import HTMLParser
 from io import BytesIO
@@ -20,6 +20,7 @@ from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from config import load_config
+from delivery_state import ensure_schema, is_blocked, block_domain, hold_delivery, domain_for, policy_failure
 
 
 app_config = load_config()
@@ -32,22 +33,23 @@ INLINE_IMAGE_WIDTH = 600
 _last_bounce_scan = None
 
 
-def _remember_newsletter(message_id: str) -> None:
+def _remember_newsletter(message_id: str, uid: str = "", uidvalidity: str = "") -> None:
     if app_config.test.enabled or not message_id:
         return
     with sqlite3.connect(app_config.resolved_db_path) as con:
-        con.execute("CREATE TABLE IF NOT EXISTS newsletter_messages "
-                    "(message_id TEXT PRIMARY KEY, created_at TEXT NOT NULL)")
-        con.execute("INSERT OR IGNORE INTO newsletter_messages VALUES (?, ?)",
-                    (message_id, datetime.now(timezone.utc).isoformat()))
+        ensure_schema(con)
+        con.execute("INSERT INTO newsletter_messages(message_id,created_at,uid,uidvalidity) "
+                    "VALUES (?,?,?,?) ON CONFLICT(message_id) DO UPDATE SET "
+                    "uid=COALESCE(NULLIF(excluded.uid,''),newsletter_messages.uid), "
+                    "uidvalidity=COALESCE(NULLIF(excluded.uidvalidity,''),newsletter_messages.uidvalidity)",
+                    (message_id, datetime.now(timezone.utc).isoformat(), uid, uidvalidity))
 
 
 def _permanent_mailbox_failure(dsn: str, diagnostic: str) -> bool:
     # RFC 3463: unknown mailbox or permanently disabled mailbox. Never classify
     # all 5xx responses as dead recipients: policy/IP blocks also use 5xx.
-    if re.search(r"\b(spam|block(?:ed|list)?|blacklist(?:ed)?|reputation|"
-                 r"policy|access denied|rate limit|SPF|DKIM|DMARC)\b",
-                 diagnostic, re.IGNORECASE):
+    if policy_failure(dsn, diagnostic) or re.search(r"\b(access denied|rate limit)\b",
+                                                  diagnostic, re.IGNORECASE):
         return False
     if dsn in {"5.1.1", "5.2.1"}:
         return True
@@ -63,20 +65,29 @@ def _scan_postfix_bounces() -> int:
     if app_config.test.enabled or not log_dir:
         return 0
     with sqlite3.connect(app_config.resolved_db_path) as con:
-        con.execute("CREATE TABLE IF NOT EXISTS newsletter_messages "
-                    "(message_id TEXT PRIMARY KEY, created_at TEXT NOT NULL)")
-        message_ids = {row[0] for row in con.execute(
-            "SELECT message_id FROM newsletter_messages"
-        )}
+        ensure_schema(con)
+        policy_since = _get_config_value(con.cursor(), "domain_policy_started_at")
+        if not policy_since:
+            policy_since = datetime.now(timezone.utc).isoformat()
+            _set_config_value(con.cursor(), "domain_policy_started_at", policy_since)
+        sources = {row[0]: dict(message_id=row[0], uid=row[1], uidvalidity=row[2])
+                   for row in con.execute("SELECT message_id,uid,uidvalidity FROM newsletter_messages")}
         pending = _get_config_value(con.cursor(), "pending_replay")
+        pending_request = json.loads(pending) if pending else None
         if pending:
-            message_ids.add(json.loads(pending)["message_id"])
-        if not message_ids:
+            sources[pending_request["message_id"]] = pending_request
+        tests = {}
+        for test in con.execute("SELECT id,test_message_id,message_id,recipient_id,uid,uidvalidity "
+                                "FROM domain_tests WHERE test_message_id IS NOT NULL"):
+            tests[test[1]] = test[0]
+            sources[test[1]] = dict(message_id=test[2], uid=test[4], uidvalidity=test[5])
+        if not sources:
             return 0
         # Reread the current and previous logs so a restart, rotation, or delayed
         # delivery cannot lose queue correlation. Updates are idempotent.
         queues = {}
         changed = 0
+        blocked = 0
         for name in ("mail.log.1", "mail.log"):
             path = Path(log_dir) / name
             if not path.exists():
@@ -102,7 +113,8 @@ def _scan_postfix_bounces() -> int:
                         identity = re.search(r"\bmessage-id=(<[^>]+>)", detail)
                         if identity:
                             queues[queue_id] = {
-                                "newsletter": identity[1] in message_ids,
+                                "newsletter": identity[1] in sources,
+                                "message_id": identity[1],
                                 "sender": False,
                             }
                     elif service == "qmgr":
@@ -119,18 +131,58 @@ def _scan_postfix_bounces() -> int:
                             continue
                         delivery = re.match(
                             r"to=<([^>]+)>, .*\bdsn=(\d+\.\d+\.\d+), "
-                            r"status=bounced \((.*)\)$", detail
+                            r"status=(sent|bounced|deferred) \((.*)\)$", detail
                         )
                         if not delivery:
                             continue
-                        address, dsn, diagnostic = delivery.groups()
-                        if not _permanent_mailbox_failure(dsn, diagnostic):
-                            continue
+                        address, dsn, status, diagnostic = delivery.groups()
                         row = con.execute(
                             "SELECT id, updated_at FROM recipients "
                             "WHERE lower(email)=? AND unsubscribed=0", (address.lower(),)
                         ).fetchone()
                         if not row:
+                            continue
+                        source = sources[queue["message_id"]]
+                        test_id = tests.get(queue["message_id"])
+                        event_at = bounced_at.astimezone(timezone.utc).isoformat()
+                        if status == "sent":
+                            con.execute("DELETE FROM held_deliveries WHERE message_id=? "
+                                        "AND recipient_id=? AND created_at<=?",
+                                        (source["message_id"], row[0], event_at))
+                            if test_id:
+                                con.execute("UPDATE domain_tests SET status='sent',result=? WHERE id=?",
+                                            ("Receiving server accepted the test. One queued message cleared; domain remains held.", test_id))
+                            continue
+                        if test_id:
+                            result = (f"Test deferred (SMTP {dsn}); Postfix will retry it. Domain remains held."
+                                      if status == "deferred" else
+                                      f"Test bounced (SMTP {dsn}); message remains held. Domain remains held.")
+                            if _permanent_mailbox_failure(dsn, diagnostic):
+                                result = f"Mailbox does not exist or is disabled (SMTP {dsn}); checking recipient status."
+                            con.execute("UPDATE domain_tests SET status=?,result=? WHERE id=?",
+                                        ("submitted" if status == "deferred" else "bounced", result, test_id))
+                        if policy_failure(dsn, diagnostic):
+                            if bounced_at < datetime.fromisoformat(policy_since):
+                                continue
+                            event = con.execute(
+                                "INSERT OR IGNORE INTO provider_failure_events VALUES (?,?,?)",
+                                (queue_id, event_at, address.lower()),
+                            )
+                            if not event.rowcount:
+                                continue
+                            block_domain(con, domain_for(address),
+                                         f"SMTP {dsn}: provider spam, reputation, or policy rejection", event_at)
+                            blocked += 1
+                            still_pending = (pending_request and source["message_id"] == pending_request["message_id"]
+                                             and row[0] in pending_request.get("recipient_ids", []))
+                            # Deferred mail still belongs to Postfix, which will retry it.
+                            if status == "bounced" and not still_pending:
+                                if source.get("uid") and source.get("uidvalidity"):
+                                    hold_delivery(con, source, row[0], event_at)
+                                else:
+                                    print("Provider failure needs operator review: source mailbox identity unavailable")
+                            continue
+                        if status != "bounced" or not _permanent_mailbox_failure(dsn, diagnostic):
                             continue
                         # An old bounce must not reverse a newer subscription or
                         # operator update when logs are scanned again.
@@ -138,6 +190,9 @@ def _scan_postfix_bounces() -> int:
                         if updated.tzinfo is None:
                             updated = updated.replace(tzinfo=timezone.utc)
                         if updated >= bounced_at:
+                            if test_id:
+                                con.execute("UPDATE domain_tests SET result=? WHERE id=?",
+                                            ("Mailbox failure reported, but a newer recipient update exists; review required.", test_id))
                             continue
                         now = datetime.now(timezone.utc).isoformat()
                         con.execute(
@@ -145,8 +200,14 @@ def _scan_postfix_bounces() -> int:
                             "updated_at=? WHERE id=?", (now, now, row[0])
                         )
                         changed += 1
+                        con.execute("DELETE FROM held_deliveries WHERE recipient_id=?", (row[0],))
+                        if test_id:
+                            con.execute("UPDATE domain_tests SET result=? WHERE id=?",
+                                        (f"Mailbox does not exist or is disabled (SMTP {dsn}); recipient unsubscribed and queued messages removed.", test_id))
         if changed:
             print(f"Automatically unsubscribed {changed} permanent mailbox failures")
+        if blocked:
+            print(f"Recorded {blocked} provider policy failures; affected domains paused")
         return changed
 
 
@@ -161,6 +222,16 @@ def _check_bounces() -> None:
     except Exception as error:
         # Keep mail flowing; do not expose recipient addresses or raw log lines.
         print(f"Bounce scan failed ({type(error).__name__}); retrying in 60 seconds")
+
+
+def _batch_pause(imap) -> None:
+    remaining = random.uniform(*app_config.relay.between_batches_sleep_seconds)
+    while remaining > 0:
+        interval = min(30, remaining)
+        time.sleep(interval)
+        remaining -= interval
+        _check_bounces()
+        _process_domain_tests(imap)
 
 
 def load_contacts() -> list[tuple[int, str, str]]:
@@ -558,6 +629,168 @@ def _finish_replay_recipient(recipient_id: int, sent: bool) -> None:
             cur.execute("DELETE FROM config WHERE key='pending_replay'")
 
 
+def _hold_replay_recipient(recipient_id: int) -> None:
+    with sqlite3.connect(app_config.resolved_db_path) as con:
+        ensure_schema(con)
+        cur = con.cursor()
+        request = json.loads(_get_config_value(cur, "pending_replay"))
+        hold_delivery(con, request, recipient_id)
+        request["recipient_ids"].remove(recipient_id)
+        request["held_count"] = request.get("held_count", 0) + 1
+        if request["recipient_ids"]:
+            _set_config_value(cur, "pending_replay", json.dumps(request))
+        else:
+            cur.execute("DELETE FROM config WHERE key='pending_replay'")
+
+
+def _fetch_retry_source(imap, source: dict) -> bytes:
+    validity = imap.response("UIDVALIDITY")[1]
+    if not validity or validity[0].decode() != source["uidvalidity"]:
+        raise RuntimeError("Retry mailbox identity changed")
+    status, fetched = imap.uid("fetch", str(source["uid"]), "(BODY.PEEK[])")
+    if status != "OK":
+        raise RuntimeError("Retry source unavailable")
+    raw = b"".join(item[1] for item in fetched if isinstance(item, tuple))
+    msg = BytesParser(policy=policy.SMTP).parsebytes(raw)
+    if str(msg.get("Message-ID")) != source["message_id"]:
+        raise RuntimeError("Retry source identity changed")
+    if app_config.imap.normalized_filter_recipient not in str(msg.get("From", "")).lower():
+        raise RuntimeError("Retry source sender does not match")
+    return raw
+
+
+def _process_held_deliveries(imap) -> bool:
+    if app_config.test.enabled:
+        return False
+    with sqlite3.connect(app_config.resolved_db_path) as con:
+        ensure_schema(con)
+        rows = con.execute("SELECT message_id,recipient_id,uid,uidvalidity FROM held_deliveries "
+                           "ORDER BY created_at,recipient_id").fetchall()
+    attempts = 0
+    sources = {}
+    for message_id, recipient_id, uid, uidvalidity in rows:
+        _check_bounces()
+        _process_domain_tests(imap)
+        with sqlite3.connect(app_config.resolved_db_path) as con:
+            row = con.execute("SELECT email,token FROM recipients WHERE id=? AND unsubscribed=0",
+                              (recipient_id,)).fetchone()
+            if not row:
+                con.execute("DELETE FROM held_deliveries WHERE message_id=? AND recipient_id=?",
+                            (message_id, recipient_id))
+                continue
+            if is_blocked(con, row[0]):
+                continue
+            if con.execute("SELECT 1 FROM domain_tests WHERE message_id=? AND recipient_id=? "
+                           "AND status IN ('sending','submitted')", (message_id, recipient_id)).fetchone():
+                continue
+            # A later successful Postfix event may already have cleared this job.
+            if not con.execute("SELECT 1 FROM held_deliveries WHERE message_id=? AND recipient_id=?",
+                               (message_id, recipient_id)).fetchone():
+                continue
+        source = dict(message_id=message_id, uid=uid, uidvalidity=uidvalidity)
+        smtp = None
+        try:
+            if message_id not in sources:
+                sources[message_id] = _fetch_retry_source(imap, source)
+            mime_bytes = forward_full_fidelity(sources[message_id], *row)
+            smtp = connect_smtp()
+            smtp.sendmail(app_config.smtp.username, [row[0]], mime_bytes)
+            with sqlite3.connect(app_config.resolved_db_path) as con:
+                con.execute("DELETE FROM held_deliveries WHERE message_id=? AND recipient_id=?",
+                            (message_id, recipient_id))
+            print("Submitted a released domain retry")
+        except Exception as error:
+            print(f"Domain retry failed ({type(error).__name__}); retained for retry")
+        finally:
+            if smtp is not None:
+                try:
+                    smtp.quit()
+                except Exception:
+                    smtp.close()
+        attempts += 1
+        time.sleep(random.uniform(*app_config.relay.per_recipient_sleep_seconds))
+        if attempts % app_config.relay.batch_size == 0:
+            _batch_pause(imap)
+    return attempts > 0
+
+
+def _process_domain_tests(imap) -> bool:
+    """Send one explicitly requested probe without releasing the domain."""
+    if app_config.test.enabled:
+        return False
+    with sqlite3.connect(app_config.resolved_db_path) as con:
+        ensure_schema(con)
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        con.execute("UPDATE domain_tests SET status='error',result=? "
+                    "WHERE status='sending' AND created_at<?",
+                    ("Test interrupted. Queued message retained; review delivery logs before testing again.", cutoff))
+        test = con.execute("SELECT id,domain FROM domain_tests WHERE status='pending' ORDER BY id LIMIT 1").fetchone()
+        if not test:
+            return False
+        test_id, domain = test
+        if not con.execute("SELECT 1 FROM domain_blocks WHERE domain=? AND released_at IS NULL", (domain,)).fetchone():
+            con.execute("UPDATE domain_tests SET status='error',result=? WHERE id=?",
+                        ("Domain hold was already removed; normal retries will handle queued messages.", test_id))
+            return False
+        candidate = con.execute(
+            "SELECT h.message_id,h.recipient_id,h.uid,h.uidvalidity,r.email,r.token "
+            "FROM held_deliveries h JOIN recipients r ON r.id=h.recipient_id "
+            "WHERE r.unsubscribed=0 AND lower(substr(r.email,instr(r.email,'@')+1))=? "
+            "ORDER BY h.created_at,h.recipient_id LIMIT 1", (domain,),
+        ).fetchone()
+        if not candidate:
+            pending = _get_config_value(con.cursor(), "pending_replay")
+            request = json.loads(pending) if pending else None
+            contacts = con.execute("SELECT id,email,token FROM recipients WHERE unsubscribed=0 "
+                                   "AND lower(substr(email,instr(email,'@')+1))=? ORDER BY id", (domain,)).fetchall()
+            queued = set(request["recipient_ids"]) if request else set()
+            contact = next((row for row in contacts if row[0] in queued), None)
+            if contact:
+                hold_delivery(con, request, contact[0])
+                request["recipient_ids"].remove(contact[0])
+                request["held_count"] = request.get("held_count", 0) + 1
+                if request["recipient_ids"]:
+                    _set_config_value(con.cursor(), "pending_replay", json.dumps(request))
+                else:
+                    con.execute("DELETE FROM config WHERE key='pending_replay'")
+                candidate = (request["message_id"], contact[0], request["uid"], request["uidvalidity"], contact[1], contact[2])
+        if not candidate:
+            con.execute("UPDATE domain_tests SET status='error',result=? WHERE id=?",
+                        ("No queued message for an active recipient in this domain.", test_id))
+            return False
+        message_id, recipient_id, uid, uidvalidity, address, token = candidate
+        identity = make_msgid(domain=app_config.web.domain)
+        con.execute("UPDATE domain_tests SET status='sending',result=?,message_id=?,recipient_id=?,"
+                    "uid=?,uidvalidity=?,test_message_id=? WHERE id=? AND status='pending'",
+                    ("Sending one queued message; domain remains held.", message_id, recipient_id,
+                     uid, uidvalidity, identity, test_id))
+    smtp = None
+    try:
+        raw = _fetch_retry_source(imap, dict(message_id=message_id, uid=uid, uidvalidity=uidvalidity))
+        outgoing = BytesParser(policy=policy.SMTP).parsebytes(forward_full_fidelity(raw, address, token))
+        set_or_replace(outgoing, "Message-ID", identity)
+        smtp = connect_smtp()
+        smtp.sendmail(app_config.smtp.username, [address], outgoing.as_bytes(policy=policy.SMTP))
+        with sqlite3.connect(app_config.resolved_db_path) as con:
+            con.execute("UPDATE domain_tests SET status='submitted',result=?,submitted_at=? WHERE id=?",
+                        ("Submitted to Postfix; awaiting the receiving server's result. Domain remains held.",
+                         datetime.now(timezone.utc).isoformat(), test_id))
+        print("Submitted one requested domain test; awaiting provider result")
+    except Exception as error:
+        with sqlite3.connect(app_config.resolved_db_path) as con:
+            con.execute("UPDATE domain_tests SET status='error',result=? WHERE id=?",
+                        (f"Test submission failed ({type(error).__name__}); queued message retained.", test_id))
+        print(f"Domain test failed ({type(error).__name__}); queued message retained")
+    finally:
+        if smtp is not None:
+            try:
+                smtp.quit()
+            except Exception:
+                smtp.close()
+    time.sleep(random.uniform(*app_config.relay.per_recipient_sleep_seconds))
+    return True
+
+
 def _process_pending_replay(imap) -> bool:
     """Regenerate an explicitly staged recipient subset without rewinding IMAP."""
     with sqlite3.connect(app_config.resolved_db_path) as con:
@@ -579,19 +812,32 @@ def _process_pending_replay(imap) -> bool:
         raise RuntimeError("Pending replay source message identity changed")
     if app_config.imap.normalized_filter_recipient not in (msg.get("From") or "").lower():
         raise RuntimeError("Pending replay source does not match the sender filter")
-    _remember_newsletter(request["message_id"])
+    _remember_newsletter(request["message_id"], request["uid"], request["uidvalidity"])
 
     print(f"Processing pending replay for {len(request['recipient_ids'])} recipients")
-    for attempt, recipient_id in enumerate(request["recipient_ids"], start=1):
+    attempts = 0
+    held = 0
+    for recipient_id in request["recipient_ids"]:
         _check_bounces()
+        _process_domain_tests(imap)
+        # A requested test can move a recipient from this snapshot to the held queue.
+        with sqlite3.connect(app_config.resolved_db_path) as con:
+            pending = _get_config_value(con.cursor(), "pending_replay")
+            if not pending or recipient_id not in json.loads(pending)["recipient_ids"]:
+                continue
         # Recheck unsubscribe status immediately before each submission.
         with sqlite3.connect(app_config.resolved_db_path) as con:
             row = con.execute(
                 "SELECT email, token FROM recipients WHERE id=? AND unsubscribed=0",
                 (recipient_id,),
             ).fetchone()
+            blocked = bool(row and is_blocked(con, row[0]))
         if row is None:
             _finish_replay_recipient(recipient_id, sent=False)
+            continue
+        if blocked:
+            _hold_replay_recipient(recipient_id)
+            held += 1
             continue
         rcpt, token = row
         smtp = None
@@ -612,8 +858,12 @@ def _process_pending_replay(imap) -> bool:
                 except Exception:
                     smtp.close()
         time.sleep(random.uniform(*app_config.relay.per_recipient_sleep_seconds))
-        if attempt % app_config.relay.batch_size == 0:
-            time.sleep(random.uniform(*app_config.relay.between_batches_sleep_seconds))
+        attempts += 1
+        if attempts % app_config.relay.batch_size == 0:
+            _process_held_deliveries(imap)
+            _batch_pause(imap)
+    if held:
+        print(f"Held {held} recipients for blocked domains; other delivery continues")
     return True
 
 
@@ -622,6 +872,8 @@ def main_loop():
     con = None
     try:
         _check_bounces()
+        _process_domain_tests(imap)
+        _process_held_deliveries(imap)
         if _process_pending_replay(imap):
             return
         con = sqlite3.connect(app_config.resolved_db_path)
@@ -724,15 +976,23 @@ def main_loop():
             # Send in priority order
             completed = 0
             attempts = 0
-            _remember_newsletter(str(msg.get("Message-ID") or ""))
+            source = dict(message_id=str(msg.get("Message-ID") or ""), uid=uid_text,
+                          uidvalidity=imap.response("UIDVALIDITY")[1][0].decode())
+            _remember_newsletter(source["message_id"], source["uid"], source["uidvalidity"])
             _start_delivery_status(msg_dt.isoformat(), "Newsletter", len(contacts))
             for _rank, rcpt, token in contacts:
                 _check_bounces()
+                _process_domain_tests(imap)
                 with sqlite3.connect(app_config.resolved_db_path) as active_con:
                     if not app_config.test.enabled and not active_con.execute(
                         "SELECT 1 FROM recipients WHERE lower(email)=? AND unsubscribed=0",
                         (rcpt.lower(),),
                     ).fetchone():
+                        continue
+                    if not app_config.test.enabled and is_blocked(active_con, rcpt):
+                        recipient_id = active_con.execute("SELECT id FROM recipients WHERE lower(email)=?",
+                                                          (rcpt.lower(),)).fetchone()[0]
+                        hold_delivery(active_con, source, recipient_id)
                         continue
 
                 try:
@@ -754,7 +1014,7 @@ def main_loop():
                 _set_delivery_progress(completed, len(contacts))
                 attempts += 1
                 if attempts % app_config.relay.batch_size == 0:
-                    time.sleep(random.uniform(*app_config.relay.between_batches_sleep_seconds))
+                    _batch_pause(imap)
 
             time.sleep(random.uniform(*app_config.relay.per_message_sleep_seconds))
     except Exception as e:

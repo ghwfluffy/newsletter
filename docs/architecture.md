@@ -70,6 +70,7 @@ Optional table if you want visibility into deliveries.
 
 - `message_id` TEXT PRIMARY KEY: original newsletter source Message-ID.
 - `created_at` TEXT NOT NULL: first recorded timestamp in UTC.
+- `uid`, `uidvalidity` TEXT: source IMAP identity for policy-failure retries.
 
 The relay creates this table automatically and records normal newsletter and
 replay source identities. Bounce handling correlates Postfix cleanup Message-ID
@@ -89,6 +90,52 @@ latest update are ignored, preventing repeated processing from reversing a new
 subscription. The scanner uses aggregate logs and catches errors without
 exposing addresses. Returned email DSNs and failures missing from these retained
 local logs require operator review; no IMAP bounce parser is used.
+
+### Domain holds, retries, and tests
+
+The relay and admin UI automatically create and migrate the shared delivery tables:
+
+- `domain_blocks`: exact recipient email domain, reason, `blocked_at`, and nullable
+  `released_at`. A null release timestamp means sending to that domain is held.
+- `held_deliveries`: unique `(message_id, recipient_id)`, source `uid` and
+  `uidvalidity`, and `created_at`. Holding a replay recipient and removing it from
+  `pending_replay` happen in one SQLite transaction; the replay's `held_count`
+  tracks these transfers. This queue does not prevent delivery to other domains.
+- `provider_failure_events`: unique `(queue_id, event_at, recipient)` for
+  idempotent handling of trusted Postfix policy failures. `config` key
+  `domain_policy_started_at` is the UTC lower bound for first-time policy scanning,
+  initialized when tracking first runs, and can be staged by an operator for
+  recovery of a known recent mailing. Older resolved policy blocks are ignored.
+- `domain_tests`: requested domain, request timestamp, status/result, original
+  source and recipient identity, fresh `test_message_id`, and SMTP submission
+  timestamp. Requests persist across restarts and are claimed by the relay.
+
+Spam/block-list/reputation/authentication/policy diagnostics in correlated local
+Postfix failure records automatically hold the recipient domain. A bounced message
+is restored to `held_deliveries` using the source metadata; an address still pending
+in the replay already has a durable copy and is not queued twice. Postfix owns
+deferred messages. Later accepted deliveries remove stale recovery jobs. Missing
+source metadata is reported for operator review. Events are applied once; releasing
+a domain does not retrigger its old policy failures, while new failures can rehold it.
+
+The admin portal shows active holds and queue counts before the usual management
+sections, and offers authenticated, CSRF-protected hold/release/test POST actions.
+Releasing a domain makes saved messages eligible for throttled retry, with mailbox,
+source sender, Message-ID, and current subscription status checked before sending.
+Unsubscribed recipients' jobs are discarded. Retry failures preserve jobs. Retry
+processing runs before normal polling and at replay batch boundaries.
+
+A domain test claims one queued recipient without releasing the hold. It uses a
+fresh Message-ID correlated to the original job, so Postfix's downstream result
+updates the portal and clears only that message after receiving-server acceptance.
+Permanent mailbox failures unsubscribe and clear that recipient's jobs; policy
+failures leave them held. In-flight tests are excluded from ordinary retries.
+Only one pending/in-flight test per domain is allowed. The relay checks for test
+requests between recipients and every 30 seconds during randomized batch pauses;
+the log scan checks provider results at most once per minute. Interrupted sending
+claims are reported for review after ten minutes. SMTP acceptance and SQLite writes
+cannot share a transaction, so crashes at the acceptance/update boundary can duplicate
+mail. Returned-email-only failures remain outside this local-log workflow.
 
 ### Public subscription records
 

@@ -19,13 +19,15 @@ class BounceTests(unittest.TestCase):
         with sqlite3.connect(self.db) as con:
             con.executescript(
                 "CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT);"
+                "INSERT INTO config VALUES ('domain_policy_started_at','2026-09-29T00:00:00+00:00');"
                 "CREATE TABLE recipients (id INTEGER PRIMARY KEY, email TEXT, "
                 "unsubscribed INTEGER, updated_at TEXT, unsubscribed_at TEXT, token TEXT);"
                 "INSERT INTO recipients VALUES (1,'reader@example.com',0,"
                 "'2026-09-29T00:00:00+00:00',NULL,'test-token');"
             )
             con.execute('INSERT INTO config VALUES (?,?)',
-                        ('pending_replay', json.dumps({'message_id': '<newsletter@example.com>'})))
+                        ('pending_replay', json.dumps({'message_id': '<newsletter@example.com>',
+                                                      'uid': '2603', 'uidvalidity': '1', 'recipient_ids': []})))
         config = SimpleNamespace(
             resolved_db_path=self.db, test=SimpleNamespace(enabled=False),
             smtp=SimpleNamespace(username='sender@example.com'),

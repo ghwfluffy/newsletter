@@ -119,6 +119,48 @@ retry at the next check. The relay creates `newsletter_messages` automatically
 to retain source Message-IDs for correlation after a replay finishes. Logs show
 only the count of recipients automatically unsubscribed.
 
+## Domain holds and queued retries
+
+The authenticated `/manage` portal prominently shows **Domain delivery holds**,
+held-message counts, the remaining replay recipients affected, and each domain's
+reason and most recent test result. **Hold domain** pauses an exact recipient
+email domain, such as `hotmail.com`. It does not unsubscribe those recipients.
+Blocked recipients move into a persistent SQLite `held_deliveries` queue, with
+the original IMAP UID, UIDVALIDITY, and Message-ID. Other domains continue
+receiving mail, and normal IMAP polling continues after the active replay finishes.
+
+With `relay.postfix_log_dir` enabled, newsletter failures citing spam, block lists,
+reputation, authentication, or provider policy automatically create domain holds.
+Permanent policy bounces restore the rejected message to the held queue; deferred
+messages remain in Postfix's queue and are retried by Postfix, avoiding duplicate
+copies in the SQLite retry queue. Permanent mailbox failures still unsubscribe.
+Policy tracking starts when enabled; the `config` table's
+`domain_policy_started_at` UTC timestamp establishes the earliest processed
+policy event so old resolved blocks are not revived during first deployment.
+Each policy event is recorded once. Removing a hold will not be reversed by
+rereading that same event, but a new rejection can restore the hold.
+
+After the provider clears its block, choose **Remove hold and retry**. Saved
+messages retry automatically, using current image processing, subscription status,
+and configured delays. Source mailbox/message identity is checked before sending;
+unavailable sources or failed submissions stay queued. Already-submitted copies
+that subsequently receive a permanent policy bounce are requeued from Postfix
+records. Retries are checked before polling and at active replay batch boundaries.
+
+**Test one queued message** sends one saved message with a fresh Message-ID while
+keeping the domain held. The request is processed by the relay between recipients
+or during batch pauses, not by the web process. Refresh the portal for its result.
+Local SMTP acceptance is shown as awaiting the provider response. Only a receiving
+server's acceptance clears that queued message; it does not prove inbox placement.
+A nonexistent/disabled-mailbox bounce unsubscribes the recipient, clears their
+queued messages, and displays the result. A policy bounce retains the message and
+domain hold. Deferred tests remain owned by Postfix; normal retries will not
+duplicate an in-flight test even if the domain hold is removed. Duplicate clicks
+do not create concurrent tests for a domain. Interrupted tests are reported for
+review after ten minutes. All domain actions require admin authentication and CSRF
+protection. These queues preserve mail across relay restarts; as with the relay,
+a crash between SMTP acceptance and saving progress can duplicate a submission.
+
 The web app creates `subscription_requests` and `subscription_events` on startup
 if they do not exist. Existing recipient records and subscription status are preserved.
 

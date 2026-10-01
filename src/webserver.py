@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from flask import Flask, request, abort
+from flask import Flask, request, abort, session
 import sqlite3
 import hmac
 import hashlib
@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 import bcrypt
 from config import load_config
 from subscriptions import register_public_routes
+from delivery_state import ensure_schema, block_domain, valid_domain
+from html import escape
 
 
 app_config = load_config()
@@ -61,7 +63,10 @@ def _split_emails(blob: str) -> list[str]:
 
 
 def _get_conn():
-    return sqlite3.connect(app_config.resolved_db_path)
+    con = sqlite3.connect(app_config.resolved_db_path)
+    ensure_schema(con)
+    con.commit()
+    return con
 
 
 def _get_config_value(cur, key: str) -> str | None:
@@ -184,10 +189,40 @@ def manage():
         return _auth_challenge()
 
     message = ""
+    if "domain_csrf" not in session:
+        session["domain_csrf"] = secrets.token_urlsafe(32)
+    domain_csrf = session["domain_csrf"]
     if request.method == "POST":
         action = request.form.get("action", "")
+        if action in {"block_domain", "release_domain", "test_domain"}:
+            if not hmac.compare_digest(request.form.get("domain_csrf", ""), domain_csrf):
+                abort(403)
         con = _get_conn()
         cur = con.cursor()
+
+        if action in {"block_domain", "release_domain", "test_domain"}:
+            domain = request.form.get("domain", "").strip().lower()
+            if not valid_domain(domain):
+                con.close()
+                abort(400, description="Enter an email domain such as hotmail.com.")
+            if action == "block_domain":
+                block_domain(con, domain, "Manually held by an administrator")
+                message = f"Delivery to {domain} is held."
+            elif action == "release_domain":
+                cur.execute("UPDATE domain_blocks SET released_at=? WHERE domain=?",
+                            (_now_iso(), domain))
+                message = f"Hold removed for {domain}. Queued messages will retry automatically."
+            else:
+                if not cur.execute("SELECT 1 FROM domain_blocks WHERE domain=? AND released_at IS NULL", (domain,)).fetchone():
+                    con.close()
+                    abort(400, description="Hold the domain before requesting a test.")
+                if cur.execute("SELECT 1 FROM domain_tests WHERE domain=? "
+                               "AND status IN ('pending','sending','submitted')", (domain,)).fetchone():
+                    message = f"A test for {domain} is already pending."
+                else:
+                    cur.execute("INSERT INTO domain_tests(domain,created_at,status,result) VALUES (?,?,'pending',?)",
+                                (domain, _now_iso(), "Waiting for the relay to test one queued message. Domain remains held."))
+                    message = f"One queued message will be tested for {domain}. Refresh to see the result; the domain remains held."
 
         if action in {"bulk_subscribe", "bulk_unsubscribe"}:
             bulk_input = request.form.get("bulk_input", "")
@@ -237,6 +272,26 @@ def manage():
     rows = cur.execute(
         "SELECT id, email, rank, unsubscribed, name FROM recipients ORDER BY email ASC"
     ).fetchall()
+    domain_rows = cur.execute(
+        "SELECT b.domain,b.reason,b.blocked_at,COUNT(h.recipient_id) FROM domain_blocks b "
+        "LEFT JOIN recipients r ON lower(substr(r.email,instr(r.email,'@')+1))=b.domain "
+        "AND r.unsubscribed=0 LEFT JOIN held_deliveries h ON h.recipient_id=r.id "
+        "WHERE b.released_at IS NULL GROUP BY b.domain ORDER BY b.domain"
+    ).fetchall()
+    held_total = cur.execute("SELECT COUNT(*) FROM held_deliveries h JOIN recipients r "
+                             "ON r.id=h.recipient_id WHERE r.unsubscribed=0").fetchone()[0]
+    test_rows = {row[0]: row[1:] for row in cur.execute(
+        "SELECT domain,status,result,created_at FROM domain_tests "
+        "WHERE id IN (SELECT MAX(id) FROM domain_tests GROUP BY domain)"
+    )}
+    replay = _get_config_value(cur, "pending_replay")
+    queued_blocked = 0
+    if replay:
+        import json
+        queued_ids = set(json.loads(replay)["recipient_ids"])
+        blocked_domains = {row[0] for row in domain_rows}
+        queued_blocked = sum(rid in queued_ids and not unsub and email.rsplit("@", 1)[-1].lower() in blocked_domains
+                             for rid, email, _rank, unsub, _name in rows)
     con.close()
 
     mode = "Debug" if app_config.test.enabled else "Production"
@@ -268,6 +323,19 @@ def manage():
 """
         )
     table_html = "".join(table_rows) if table_rows else "<tr><td colspan=\"4\">No entries.</td></tr>"
+    domain_html = "".join(
+        f'<tr><td><strong>{escape(domain)}</strong></td><td>{count}</td>'
+        f'<td>{escape(reason)}</td><td>{_render_timestamp_cell(blocked_at)}</td>'
+        f'<td>{escape(test_rows.get(domain, ("", "No test requested.", ""))[1])}</td>'
+        f'<td><form method="post"><input type="hidden" name="domain_csrf" value="{domain_csrf}">'
+        f'<input type="hidden" name="domain" value="{escape(domain, quote=True)}">'
+        '<button type="submit" name="action" value="release_domain">Remove hold and retry</button>'
+        '</form><form method="post">'
+        f'<input type="hidden" name="domain_csrf" value="{domain_csrf}">'
+        f'<input type="hidden" name="domain" value="{escape(domain, quote=True)}">'
+        '<button type="submit" name="action" value="test_domain">Test one queued message</button>'
+        '</form></td></tr>' for domain, reason, blocked_at, count in domain_rows
+    ) or '<tr><td colspan="6">No domains are held.</td></tr>'
 
     html = f"""
 <!doctype html>
@@ -285,11 +353,28 @@ def manage():
       th, td {{ text-align: left; padding: 8px; border-bottom: 1px solid #eee; }}
       input {{ width: 100%; box-sizing: border-box; }}
       .actions {{ display: flex; gap: 8px; align-items: center; }}
+      .domain-holds {{ border: 2px solid #b45309; background: #fffbeb; }}
     </style>
   </head>
   <body>
     <h1>Manage Newsletter</h1>
-    <p class="small">{message}</p>
+    <p class="small">{escape(message)}</p>
+
+    <div class="card section domain-holds">
+      <h2>Domain delivery holds</h2>
+      <p><strong>{held_total} messages held for retry; {queued_blocked} remaining replay recipients currently held by domain.</strong></p>
+      <p>Other domains continue receiving mail. Remove a hold after the provider clears the block;
+         queued messages will retry automatically. New provider spam or policy rejections restore the hold.</p>
+      <p>Testing sends only one queued message and keeps the domain held. Refresh for the receiving server's result;
+         acceptance clears that message, and a nonexistent or disabled mailbox is unsubscribed.</p>
+      <table><thead><tr><th>Domain</th><th>Held messages</th><th>Reason</th><th>Held since</th><th>Last test</th><th>Action</th></tr></thead>
+        <tbody>{domain_html}</tbody></table>
+      <form method="post" class="actions">
+        <input type="hidden" name="domain_csrf" value="{domain_csrf}">
+        <input name="domain" aria-label="Email domain" placeholder="hotmail.com" required>
+        <button type="submit" name="action" value="block_domain">Hold domain</button>
+      </form>
+    </div>
 
     <div class="card section">
       <h3>Status</h3>

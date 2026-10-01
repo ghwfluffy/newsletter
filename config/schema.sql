@@ -20,7 +20,46 @@ CREATE TABLE IF NOT EXISTS config (
 
 CREATE TABLE IF NOT EXISTS newsletter_messages (
   message_id TEXT PRIMARY KEY,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  uid TEXT,
+  uidvalidity TEXT
+);
+
+CREATE TABLE IF NOT EXISTS domain_blocks (
+  domain TEXT PRIMARY KEY,
+  reason TEXT NOT NULL,
+  blocked_at TEXT NOT NULL,
+  released_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS held_deliveries (
+  message_id TEXT NOT NULL,
+  recipient_id INTEGER NOT NULL,
+  uid TEXT NOT NULL,
+  uidvalidity TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (message_id, recipient_id)
+);
+
+CREATE TABLE IF NOT EXISTS provider_failure_events (
+  queue_id TEXT NOT NULL,
+  event_at TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  PRIMARY KEY (queue_id, event_at, recipient)
+);
+
+CREATE TABLE IF NOT EXISTS domain_tests (
+  id INTEGER PRIMARY KEY,
+  domain TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  result TEXT NOT NULL,
+  message_id TEXT,
+  recipient_id INTEGER,
+  uid TEXT,
+  uidvalidity TEXT,
+  test_message_id TEXT,
+  submitted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS subscription_requests (
