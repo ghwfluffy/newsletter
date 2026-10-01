@@ -35,7 +35,8 @@
     "batch_size": 50,
     "per_recipient_sleep_seconds": [25, 40],
     "per_message_sleep_seconds": [5, 12],
-    "between_batches_sleep_seconds": [300, 900]
+    "between_batches_sleep_seconds": [300, 900],
+    "postfix_log_dir": ""
   },
   "test": {
     "enabled": false,

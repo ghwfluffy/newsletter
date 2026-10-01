@@ -119,6 +119,7 @@ class RelayConfig:
     per_recipient_sleep_seconds: tuple[float, float]
     per_message_sleep_seconds: tuple[float, float]
     between_batches_sleep_seconds: tuple[float, float]
+    postfix_log_dir: str = ""
 
 
 @dataclass(frozen=True)
@@ -209,6 +210,7 @@ class AppConfig:
                 between_batches_sleep_seconds=_load_sleep_range(
                     relay_raw, "between_batches_sleep_seconds", (300.0, 900.0)
                 ),
+                postfix_log_dir=str(relay_raw.get("postfix_log_dir", "")),
             ),
             test=TestConfig(
                 enabled=bool(test_raw.get("enabled", False)),

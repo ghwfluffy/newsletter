@@ -29,6 +29,7 @@ services:
     command: ["python", "replay-daemon.py"]
     volumes:
       - ./config:/app/config
+      - /var/log:/app/postfix-logs:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:

@@ -18,6 +18,11 @@ CREATE TABLE IF NOT EXISTS config (
   value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS newsletter_messages (
+  message_id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS subscription_requests (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL,

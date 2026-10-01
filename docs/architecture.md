@@ -15,13 +15,13 @@ templates. Nginx proxies these routes over HTTPS; other static content remains i
 
 ## Data Flow
 1. IMAP poll: the relay daemon connects to IMAP and checks for new messages.
-2. Filter: if the message matches the configured sender or is a bounce, it is eligible for processing.
+2. Filter: if the message matches the configured sender, it is eligible for processing.
 3. Load recipients: the daemon reads active recipients from SQLite, ordered by `rank` (ascending).
 4. Send loop: the daemon sends messages via SMTP with per-recipient throttling. Inline and attached images are resized to a fixed width if larger, with EXIF orientation correction.
 5. Unsubscribe link: each message includes a signed token for the recipient (`e`, `t`, `s` query params) and a `List-Unsubscribe` header.
 6. Unsubscribe: the web app displays a confirmation page, then on confirm marks the recipient as unsubscribed and records timestamp.
 7. Admin UI (`/manage`): authenticated operators can bulk add/unsubscribe and edit existing rows in a table.
-8. Bounce handling: delivery status notifications are parsed and the bounced recipient is unsubscribed automatically.
+8. Bounce handling: when `relay.postfix_log_dir` is enabled, trusted local Postfix records for newsletter messages automatically unsubscribe permanently nonexistent or disabled mailboxes. Temporary and policy failures preserve subscription status.
 9. Test tag handling: if any recipient local part contains `+test`, the message is relayed only back to the sender with `[TEST]` in the subject.
 
 ## Database Schema
@@ -65,6 +65,30 @@ Optional table if you want visibility into deliveries.
 - `sent_at` TEXT NOT NULL (ISO-8601)
 - `status` TEXT NOT NULL
 - `error` TEXT
+
+### `newsletter_messages`
+
+- `message_id` TEXT PRIMARY KEY: original newsletter source Message-ID.
+- `created_at` TEXT NOT NULL: first recorded timestamp in UTC.
+
+The relay creates this table automatically and records normal newsletter and
+replay source identities. Bounce handling correlates Postfix cleanup Message-ID
+and qmgr envelope sender with the smtp queue ID and recipient. Pending replay
+source identity is also recognized, including previously submitted copies.
+
+`relay.postfix_log_dir` defaults to `""` (disabled). Set it to
+`/app/postfix-logs` for Compose, which mounts host `/var/log` read-only into
+the relay. Only ISO 8601 records in `mail.log.1` and `mail.log` are read.
+The files are scanned at most once per minute before polling and between
+recipients, with checks delayed during batch sleeps. A matching `status=bounced`
+with `5.1.1` or `5.2.1`, or Yahoo/AT&T's `5.0.0` diagnostic
+"This mailbox is disabled (554.30)", marks an active recipient unsubscribed
+and updates timestamps. Policy, spam, authentication, temporary, full-mailbox,
+and unrecognized failures do not unsubscribe. Events older than the recipient's
+latest update are ignored, preventing repeated processing from reversing a new
+subscription. The scanner uses aggregate logs and catches errors without
+exposing addresses. Returned email DSNs and failures missing from these retained
+local logs require operator review; no IMAP bounce parser is used.
 
 ### Public subscription records
 

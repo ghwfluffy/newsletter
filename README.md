@@ -15,13 +15,13 @@ This is designed to be self-hosted and easy to operate on a small server.
 - Unsubscribe endpoint that requires a confirmation click before marking recipients inactive.
 - Admin UI (`/manage`) protected by a static username/password (bcrypt hash stored in config).
 - Self-contained TLS issuance/renewal via ACME (`acme.sh`).
-- Automatic bounce handling to unsubscribe undeliverable addresses.
+- Optional automatic handling of permanent mailbox failures reported by local Postfix.
 - Embedded/attached image resizing (fixed width with EXIF orientation correction).
 - `+test` recipient tag routes only back to the sender with a `[TEST]` subject prefix.
 
 ## How It Works (Short)
 1. The relay daemon polls IMAP for new messages.
-2. If the message matches the configured sender or is a bounce, it is queued for processing.
+2. If the message matches the configured sender, it is queued for processing.
 3. The daemon loads active recipients from SQLite, sorted by rank, and sends the message via SMTP.
 4. For each recipient, a unique unsubscribe link is appended at the bottom of the email body.
 5. The Flask server receives unsubscribe requests and marks the recipient as unsubscribed.
@@ -76,7 +76,8 @@ All config and secrets live in `config/config.json`, split into sections:
     "batch_size": 50,
     "per_recipient_sleep_seconds": [25, 40],
     "per_message_sleep_seconds": [5, 12],
-    "between_batches_sleep_seconds": [300, 900]
+    "between_batches_sleep_seconds": [300, 900],
+    "postfix_log_dir": ""
   },
   "test": {
     "enabled": true,
@@ -89,6 +90,34 @@ All config and secrets live in `config/config.json`, split into sections:
 
 ## Database
 SQLite file path is configurable in both the relay and web app. The expected schema is documented in `docs/architecture.md`.
+
+## Permanent mailbox failures
+
+When using local Postfix, set `relay.postfix_log_dir` to `/app/postfix-logs` in
+`config/config.json` to enable automatic unsubscribe for nonexistent (`5.1.1`)
+or permanently disabled (`5.2.1`) mailboxes. The known Yahoo/AT&T `5.0.0`
+diagnostic "This mailbox is disabled (554.30)" is also handled. Temporary
+failures, full mailboxes, authentication errors, spam/policy blocks, and generic
+permanent failures leave subscription status unchanged.
+
+This optional key defaults to an empty string (disabled). Compose mounts the
+host `/var/log` directory read-only into the relay at `/app/postfix-logs`; enable
+it only on a trusted Postfix host with ISO 8601 timestamps in `mail.log`.
+For a non-container deployment, use the directory containing Postfix's logs.
+The relay reads `mail.log` and the previous uncompressed `mail.log.1`, matching
+Postfix queue IDs to recorded newsletter Message-IDs and the configured SMTP
+envelope sender. Returned bounce emails and arbitrary IMAP messages are not
+used as evidence. Failures reported only in a later returned email, or absent
+from these local logs, require operator review.
+
+Checks run at most once per minute, before polling and between recipients
+including during a pending replay; batch sleeps can delay the next check.
+Only active matching recipients are updated, with unsubscribe/update timestamps.
+Old records cannot reverse a newer subscription or recipient update. Repeated
+scans and restarts are idempotent; failures log only their exception type and
+retry at the next check. The relay creates `newsletter_messages` automatically
+to retain source Message-IDs for correlation after a replay finishes. Logs show
+only the count of recipients automatically unsubscribed.
 
 The web app creates `subscription_requests` and `subscription_events` on startup
 if they do not exist. Existing recipient records and subscription status are preserved.

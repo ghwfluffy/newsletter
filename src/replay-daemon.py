@@ -18,6 +18,7 @@ import hashlib
 import re
 from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from config import load_config
 
 
@@ -28,6 +29,138 @@ MAX_MESSAGE_AGE = timedelta(minutes=15)
 
 REPLY_TO_MODE = "original"  # "original" or "list"
 INLINE_IMAGE_WIDTH = 600
+_last_bounce_scan = None
+
+
+def _remember_newsletter(message_id: str) -> None:
+    if app_config.test.enabled or not message_id:
+        return
+    with sqlite3.connect(app_config.resolved_db_path) as con:
+        con.execute("CREATE TABLE IF NOT EXISTS newsletter_messages "
+                    "(message_id TEXT PRIMARY KEY, created_at TEXT NOT NULL)")
+        con.execute("INSERT OR IGNORE INTO newsletter_messages VALUES (?, ?)",
+                    (message_id, datetime.now(timezone.utc).isoformat()))
+
+
+def _permanent_mailbox_failure(dsn: str, diagnostic: str) -> bool:
+    # RFC 3463: unknown mailbox or permanently disabled mailbox. Never classify
+    # all 5xx responses as dead recipients: policy/IP blocks also use 5xx.
+    if re.search(r"\b(spam|block(?:ed|list)?|blacklist(?:ed)?|reputation|"
+                 r"policy|access denied|rate limit|SPF|DKIM|DMARC)\b",
+                 diagnostic, re.IGNORECASE):
+        return False
+    if dsn in {"5.1.1", "5.2.1"}:
+        return True
+    # Yahoo/AT&T sometimes reports a disabled mailbox using generic 5.0.0.
+    return dsn == "5.0.0" and bool(re.search(
+        r"\bThis mailbox is disabled \(554\.30\)", diagnostic, re.IGNORECASE
+    ))
+
+
+def _scan_postfix_bounces() -> int:
+    """Read trusted local Postfix records, never unverified inbound email."""
+    log_dir = getattr(app_config.relay, "postfix_log_dir", "")
+    if app_config.test.enabled or not log_dir:
+        return 0
+    with sqlite3.connect(app_config.resolved_db_path) as con:
+        con.execute("CREATE TABLE IF NOT EXISTS newsletter_messages "
+                    "(message_id TEXT PRIMARY KEY, created_at TEXT NOT NULL)")
+        message_ids = {row[0] for row in con.execute(
+            "SELECT message_id FROM newsletter_messages"
+        )}
+        pending = _get_config_value(con.cursor(), "pending_replay")
+        if pending:
+            message_ids.add(json.loads(pending)["message_id"])
+        if not message_ids:
+            return 0
+        # Reread the current and previous logs so a restart, rotation, or delayed
+        # delivery cannot lose queue correlation. Updates are idempotent.
+        queues = {}
+        changed = 0
+        for name in ("mail.log.1", "mail.log"):
+            path = Path(log_dir) / name
+            if not path.exists():
+                if name == "mail.log":
+                    raise FileNotFoundError("Configured Postfix mail.log is unavailable")
+                continue
+            with path.open(encoding="utf-8", errors="replace") as log:
+                for line in log:
+                    match = re.match(
+                        r"^(\S+) \S+ postfix/(cleanup|qmgr|smtp)\[\d+\]: "
+                        r"([A-Za-z0-9]+): (.*)$", line
+                    )
+                    if not match:
+                        continue
+                    timestamp, service, queue_id, detail = match.groups()
+                    try:
+                        bounced_at = datetime.fromisoformat(timestamp)
+                        if bounced_at.tzinfo is None:
+                            continue
+                    except ValueError:
+                        continue
+                    if service == "cleanup":
+                        identity = re.search(r"\bmessage-id=(<[^>]+>)", detail)
+                        if identity:
+                            queues[queue_id] = {
+                                "newsletter": identity[1] in message_ids,
+                                "sender": False,
+                            }
+                    elif service == "qmgr":
+                        if detail == "removed":
+                            queues.pop(queue_id, None)
+                        sender = re.search(r"\bfrom=<([^>]*)>", detail)
+                        if sender and queue_id in queues:
+                            queues[queue_id]["sender"] = (
+                                sender[1].lower() == app_config.smtp.username.lower()
+                            )
+                    elif service == "smtp":
+                        queue = queues.get(queue_id, {})
+                        if not queue.get("newsletter") or not queue.get("sender"):
+                            continue
+                        delivery = re.match(
+                            r"to=<([^>]+)>, .*\bdsn=(\d+\.\d+\.\d+), "
+                            r"status=bounced \((.*)\)$", detail
+                        )
+                        if not delivery:
+                            continue
+                        address, dsn, diagnostic = delivery.groups()
+                        if not _permanent_mailbox_failure(dsn, diagnostic):
+                            continue
+                        row = con.execute(
+                            "SELECT id, updated_at FROM recipients "
+                            "WHERE lower(email)=? AND unsubscribed=0", (address.lower(),)
+                        ).fetchone()
+                        if not row:
+                            continue
+                        # An old bounce must not reverse a newer subscription or
+                        # operator update when logs are scanned again.
+                        updated = datetime.fromisoformat(row[1])
+                        if updated.tzinfo is None:
+                            updated = updated.replace(tzinfo=timezone.utc)
+                        if updated >= bounced_at:
+                            continue
+                        now = datetime.now(timezone.utc).isoformat()
+                        con.execute(
+                            "UPDATE recipients SET unsubscribed=1, unsubscribed_at=?, "
+                            "updated_at=? WHERE id=?", (now, now, row[0])
+                        )
+                        changed += 1
+        if changed:
+            print(f"Automatically unsubscribed {changed} permanent mailbox failures")
+        return changed
+
+
+def _check_bounces() -> None:
+    global _last_bounce_scan
+    now = time.monotonic()
+    if _last_bounce_scan is not None and now - _last_bounce_scan < 60:
+        return
+    _last_bounce_scan = now
+    try:
+        _scan_postfix_bounces()
+    except Exception as error:
+        # Keep mail flowing; do not expose recipient addresses or raw log lines.
+        print(f"Bounce scan failed ({type(error).__name__}); retrying in 60 seconds")
 
 
 def load_contacts() -> list[tuple[int, str, str]]:
@@ -446,9 +579,11 @@ def _process_pending_replay(imap) -> bool:
         raise RuntimeError("Pending replay source message identity changed")
     if app_config.imap.normalized_filter_recipient not in (msg.get("From") or "").lower():
         raise RuntimeError("Pending replay source does not match the sender filter")
+    _remember_newsletter(request["message_id"])
 
     print(f"Processing pending replay for {len(request['recipient_ids'])} recipients")
     for attempt, recipient_id in enumerate(request["recipient_ids"], start=1):
+        _check_bounces()
         # Recheck unsubscribe status immediately before each submission.
         with sqlite3.connect(app_config.resolved_db_path) as con:
             row = con.execute(
@@ -486,6 +621,7 @@ def main_loop():
     imap = connect_imap()
     con = None
     try:
+        _check_bounces()
         if _process_pending_replay(imap):
             return
         con = sqlite3.connect(app_config.resolved_db_path)
@@ -588,9 +724,16 @@ def main_loop():
             # Send in priority order
             completed = 0
             attempts = 0
+            _remember_newsletter(str(msg.get("Message-ID") or ""))
             _start_delivery_status(msg_dt.isoformat(), "Newsletter", len(contacts))
             for _rank, rcpt, token in contacts:
-                print(f"Sending to {rcpt}")
+                _check_bounces()
+                with sqlite3.connect(app_config.resolved_db_path) as active_con:
+                    if not app_config.test.enabled and not active_con.execute(
+                        "SELECT 1 FROM recipients WHERE lower(email)=? AND unsubscribed=0",
+                        (rcpt.lower(),),
+                    ).fetchone():
+                        continue
 
                 try:
                     mime_bytes = forward_full_fidelity(raw, rcpt, token)
